@@ -1,0 +1,92 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Global default-deny catch-all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Hardened Global Helpers
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    // Validation for User Profile
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['id', 'email', 'name', 'role', 'createdAt']) &&
+        data.keys().hasOnly(['id', 'email', 'name', 'role', 'company', 'createdAt']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.email is string && data.email.size() <= 150 &&
+        data.name is string && data.name.size() > 0 && data.name.size() <= 100 &&
+        data.role in ['freelancer', 'client'] &&
+        (!('company' in data) || (data.company is string && data.company.size() <= 100)) &&
+        data.createdAt is string && data.createdAt.size() <= 50;
+    }
+
+    // Validation for File Record
+    function isValidFileRecord(data) {
+      return data.keys().hasAll(['id', 'userId', 'originalName', 'storedFileName', 'mimeType', 'size', 'uploadedAt', 'project', 'downloadsCount']) &&
+        data.keys().hasOnly(['id', 'userId', 'originalName', 'storedFileName', 'mimeType', 'size', 'uploadedAt', 'project', 'clientName', 'note', 'downloadsCount', 'fileData']) &&
+        data.id is string && data.id.size() <= 128 &&
+        data.userId is string && data.userId.size() <= 128 &&
+        data.originalName is string && data.originalName.size() > 0 && data.originalName.size() <= 255 &&
+        data.storedFileName is string && data.storedFileName.size() <= 255 &&
+        data.mimeType is string && data.mimeType.size() <= 100 &&
+        data.size is number && data.size >= 0 &&
+        data.uploadedAt is string && data.uploadedAt.size() <= 50 &&
+        data.project is string && data.project.size() > 0 && data.project.size() <= 100 &&
+        data.downloadsCount is number && data.downloadsCount >= 0 &&
+        (!('clientName' in data) || (data.clientName is string && data.clientName.size() <= 100)) &&
+        (!('note' in data) || (data.note is string && data.note.size() <= 500)) &&
+        (!('fileData' in data) || (data.fileData is string && data.fileData.size() <= 1048576));
+    }
+
+    // User profiles collection
+    match /users/{userId} {
+      allow get: if isOwner(userId) && isValidId(userId);
+      allow list: if false; // Strict PII isolation, no directory enumeration
+      allow create: if isOwner(userId) && isValidId(userId) &&
+        isValidUserProfile(incoming()) && incoming().id == userId;
+      allow update: if isOwner(userId) && isValidId(userId) &&
+        isValidUserProfile(incoming()) && incoming().id == userId &&
+        incoming().createdAt == existing().createdAt;
+      allow delete: if isOwner(userId) && isValidId(userId);
+    }
+
+    // Files collection
+    match /files/{fileId} {
+      allow get: if isSignedIn() && isValidId(fileId) && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidId(fileId) &&
+        isValidFileRecord(incoming()) &&
+        incoming().id == fileId &&
+        incoming().userId == request.auth.uid;
+      allow update: if isSignedIn() && isValidId(fileId) &&
+        isValidFileRecord(incoming()) &&
+        existing().userId == request.auth.uid &&
+        incoming().userId == existing().userId &&
+        incoming().id == existing().id &&
+        incoming().uploadedAt == existing().uploadedAt;
+      allow delete: if isSignedIn() && isValidId(fileId) &&
+        existing().userId == request.auth.uid;
+    }
+  }
+}

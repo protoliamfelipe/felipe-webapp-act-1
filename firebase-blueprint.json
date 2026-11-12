@@ -1,0 +1,112 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile with role and organization info",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "User unique ID matching Auth UID"
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User email address"
+        },
+        "name": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Full name of the user"
+        },
+        "role": {
+          "type": "string",
+          "enum": ["freelancer", "client"],
+          "description": "Role in the portal"
+        },
+        "company": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Studio or client company name"
+        },
+        "createdAt": {
+          "type": "string",
+          "description": "Creation timestamp ISO string"
+        }
+      },
+      "required": ["id", "email", "name", "role", "createdAt"]
+    },
+    "FileRecord": {
+      "title": "FileRecord",
+      "description": "Metadata for an uploaded client file or deliverable",
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "description": "Unique file record ID"
+        },
+        "userId": {
+          "type": "string",
+          "description": "Owner user UID"
+        },
+        "originalName": {
+          "type": "string",
+          "maxLength": 255,
+          "description": "Original file name"
+        },
+        "storedFileName": {
+          "type": "string",
+          "maxLength": 255,
+          "description": "Stored file name or storage reference"
+        },
+        "mimeType": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "MIME type of file"
+        },
+        "size": {
+          "type": "number",
+          "description": "File size in bytes"
+        },
+        "uploadedAt": {
+          "type": "string",
+          "description": "Upload ISO timestamp"
+        },
+        "project": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Project or folder name"
+        },
+        "clientName": {
+          "type": "string",
+          "maxLength": 100,
+          "description": "Target client name"
+        },
+        "note": {
+          "type": "string",
+          "maxLength": 500,
+          "description": "Optional deliverable note"
+        },
+        "downloadsCount": {
+          "type": "number",
+          "description": "Download counter"
+        },
+        "fileData": {
+          "type": "string",
+          "description": "Base64 or data URL for small files/previews or download payload"
+        }
+      },
+      "required": ["id", "userId", "originalName", "storedFileName", "mimeType", "size", "uploadedAt", "project", "downloadsCount"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Stores user profile data where userId matches auth.uid"
+    },
+    "/files/{fileId}": {
+      "schema": "FileRecord",
+      "description": "Stores uploaded client file metadata owned by userId"
+    }
+  }
+}
