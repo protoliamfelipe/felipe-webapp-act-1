@@ -1,6 +1,6 @@
 {
-  "name": "FeliVault - Client File Portal",
-  "description": "Secure client file portal for freelancers and designers to exchange, manage, and deliver files with clients.",
+  "name": "Pilgrim - Tactical Gamer Community & Media Hub",
+  "description": "A modern community chat and creator media platform featuring server channels, direct messaging, video and image sharing, and privacy controls.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

@@ -1,15 +1,77 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+:root {
+  --pilgrim-letter-spacing: 0em;
+  --pilgrim-card-padding: 1.25rem;
+  --pilgrim-stack-gap: 1.5rem;
+}
+
+[data-spacing="compact"] {
+  --pilgrim-card-padding: 0.875rem;
+  --pilgrim-stack-gap: 0.875rem;
+}
+
+[data-spacing="comfortable"] {
+  --pilgrim-card-padding: 1.25rem;
+  --pilgrim-stack-gap: 1.5rem;
+}
+
+[data-spacing="spacious"] {
+  --pilgrim-card-padding: 1.75rem;
+  --pilgrim-stack-gap: 2.25rem;
+}
 
 @layer base {
   body {
-    font-family: 'Plus Jakarta Sans', system-ui, -apple-system, sans-serif;
-    color: #1e293b;
-    background-color: #f8fafc;
+    font-family: 'Satoshi', system-ui, -apple-system, sans-serif;
+    letter-spacing: var(--pilgrim-letter-spacing);
+    color: #09090b;
+    background-color: #f4f4f5;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+    transition: background-color 0.2s ease, color 0.2s ease;
+  }
+
+  .dark body {
+    color: #fafafa;
+    background-color: #09090b;
+  }
+
+  h1, h2, h3, .font-display {
+    font-family: 'Cabinet Grotesk', 'Satoshi', system-ui, sans-serif;
   }
 
   code, pre, .font-mono {
     font-family: 'JetBrains Mono', monospace;
   }
+}
+
+.pilgrim-card-pad {
+  padding: var(--pilgrim-card-padding);
+}
+
+.pilgrim-stack {
+  display: flex;
+  flex-direction: column;
+  gap: var(--pilgrim-stack-gap);
+}
+
+/* Custom clean minimal scrollbars for Snow White Light & Dark palette */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+::-webkit-scrollbar-thumb {
+  background: #d4d4d8;
+  border-radius: 9999px;
+}
+.dark ::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #a1a1aa;
 }

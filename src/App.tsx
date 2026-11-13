@@ -1,592 +1,1392 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { motion, AnimatePresence } from 'motion/react';
+import { CheckCircle2, Plus, Video, Image as ImageIcon, MessageSquare } from 'lucide-react';
 import {
-  UploadCloud,
-  Search,
-  Filter,
-  LayoutGrid,
-  List,
-  SortDesc,
-  Plus,
-  Files,
-  FolderKanban,
-  HardDrive,
-  ShieldCheck,
-  AlertCircle,
-  CheckCircle,
-  FileText,
-  Clock,
-  Sparkles,
-  ArrowUpDown,
-} from 'lucide-react';
-import { User, FileRecord } from './types';
-import { api, getStoredUser, clearStoredAuth, getStoredToken } from './services/api';
-import { fbService, auth } from './services/firebase';
-import { onAuthStateChanged } from 'firebase/auth';
-import { formatBytes, formatDate, getFileCategory, downloadAuthenticatedFile } from './utils/formatters';
+  User,
+  UserStatus,
+  Server,
+  Channel,
+  Post,
+  ChatMessage,
+  FriendsOverview,
+  Visibility,
+  UserPreferences,
+  VoiceParticipant,
+  VoiceSettings,
+} from './types';
+import { api, getStoredToken, clearStoredAuth } from './services/api';
+import { makeInitialsAvatar } from './utils/avatars';
+import { hasServerPermission } from './utils/permissions';
 import { AuthScreen } from './components/AuthScreen';
-import { Sidebar } from './components/Sidebar';
+import { Sidebar, AppView, ActiveVoiceInfo } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
-import { UploadModal } from './components/UploadModal';
-import { FileList } from './components/FileList';
-import { FilePreviewModal } from './components/FilePreviewModal';
-import { DeleteConfirmModal } from './components/DeleteConfirmModal';
-import { ShareModal } from './components/ShareModal';
+import { StartupPage } from './components/StartupPage';
+import { PostCard } from './components/PostCard';
+import { PostComposerModal } from './components/PostComposerModal';
+import { ProfileDashboard } from './components/ProfileDashboard';
+import { ServerWorkspace } from './components/ServerWorkspace';
+import { FriendsView } from './components/FriendsView';
+import { NewServerModal } from './components/NewServerModal';
+import { ReportModal, ReportTarget } from './components/ReportModal';
+import { SharePostModal } from './components/SharePostModal';
+import { ForwardMessageModal } from './components/ForwardMessageModal';
+import { SafetyView } from './components/SafetyView';
+import { SettingsView } from './components/SettingsView';
+
+const PREFERENCES_STORAGE_KEY = 'pilgrim_user_preferences';
+
+const DEFAULT_VOICE_SETTINGS: VoiceSettings = {
+  inputMode: 'vad',
+  pttKey: 'Space',
+  inputVolume: 100,
+  outputVolume: 100,
+  sensitivity: 45,
+  noiseSuppression: true,
+  echoCancellation: true,
+};
+
+const DEFAULT_PREFERENCES: UserPreferences = {
+  theme: 'light',
+  fontSize: 'standard',
+  letterSpacing: 'normal',
+  contentSpacing: 'comfortable',
+  notificationSound: true,
+  voice: DEFAULT_VOICE_SETTINGS,
+};
+
+function loadStoredPreferences(): UserPreferences {
+  try {
+    const raw = localStorage.getItem(PREFERENCES_STORAGE_KEY);
+    if (!raw) return DEFAULT_PREFERENCES;
+    const parsed = JSON.parse(raw);
+    return {
+      theme: parsed.theme === 'dark' ? 'dark' : 'light',
+      fontSize: ['compact', 'standard', 'large', 'xlarge'].includes(parsed.fontSize)
+        ? parsed.fontSize
+        : 'standard',
+      letterSpacing: ['tight', 'normal', 'relaxed', 'wide'].includes(parsed.letterSpacing)
+        ? parsed.letterSpacing
+        : 'normal',
+      contentSpacing: ['compact', 'comfortable', 'spacious'].includes(parsed.contentSpacing)
+        ? parsed.contentSpacing
+        : 'comfortable',
+      notificationSound:
+        typeof parsed.notificationSound === 'boolean' ? parsed.notificationSound : true,
+      voice: {
+        ...DEFAULT_VOICE_SETTINGS,
+        ...(parsed.voice && typeof parsed.voice === 'object' ? parsed.voice : {}),
+      },
+    };
+  } catch {
+    return DEFAULT_PREFERENCES;
+  }
+}
+
+function playNotificationChime() {
+  try {
+    const Ctx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const osc = ctx.createOscillator();
+    const gain = ctx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(660, ctx.currentTime);
+    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.08);
+    gain.gain.setValueAtTime(0.05, ctx.currentTime);
+    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
+    osc.connect(gain);
+    gain.connect(ctx.destination);
+    osc.start();
+    osc.stop(ctx.currentTime + 0.19);
+    setTimeout(() => ctx.close().catch(() => {}), 300);
+  } catch {
+    // Ignore autoplay restriction errors
+  }
+}
 
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
-  const [isAuthChecking, setIsAuthChecking] = useState(true);
+  const [isNewSignup, setIsNewSignup] = useState(false);
+  const [authChecking, setAuthChecking] = useState(true);
+  const [preferences, setPreferences] = useState<UserPreferences>(() => loadStoredPreferences());
 
-  // Dashboard Data State
-  const [files, setFiles] = useState<FileRecord[]>([]);
-  const [availableProjects, setAvailableProjects] = useState<string[]>([]);
-  const [isLoadingFiles, setIsLoadingFiles] = useState(false);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
-
-  // Filters and views
-  const [activeNav, setActiveNav] = useState<string>('files');
-  const [selectedProject, setSelectedProject] = useState<string>('all');
-  const [selectedCategory, setSelectedCategory] = useState<string>('all');
-  const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState<string>('date_desc');
-  const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
-
-  // Modals & Drawers
-  const [isUploadOpen, setIsUploadOpen] = useState(false);
-  const [previewFile, setPreviewFile] = useState<FileRecord | null>(null);
-  const [deleteCandidate, setDeleteCandidate] = useState<FileRecord | null>(null);
-  const [isDeleting, setIsDeleting] = useState(false);
-  const [shareCandidate, setShareCandidate] = useState<FileRecord | null>(null);
-  const [isShareModalOpen, setIsShareModalOpen] = useState(false);
+  // Navigation & Views
+  const [activeView, setActiveView] = useState<AppView>('startup');
+  const [settingsFocusSection, setSettingsFocusSection] = useState<'appearance' | 'voice'>('appearance');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
 
-  // Quick drag & drop in main dashboard
-  const [isDraggingOverArea, setIsDraggingOverArea] = useState(false);
-  const inlineFileInputRef = useRef<HTMLInputElement>(null);
+  // Servers & Chat
+  const [servers, setServers] = useState<Array<Server & { isMember: boolean; memberCount: number }>>([]);
+  const [serverSearch, setServerSearch] = useState('');
+  const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
+  const [incomingWsMessage, setIncomingWsMessage] = useState<ChatMessage | null>(null);
+  const [incomingWsUpdatedMessage, setIncomingWsUpdatedMessage] = useState<ChatMessage | null>(null);
+  const [incomingWsDeletedMessageId, setIncomingWsDeletedMessageId] = useState<string | null>(null);
 
-  const showToast = (message: string) => {
-    setToastMsg(message);
-    setTimeout(() => {
-      setToastMsg((prev) => (prev === message ? null : prev));
-    }, 3500);
-  };
+  // Voice Channels & WebRTC Refs
+  const [voiceParticipantsByServer, setVoiceParticipantsByServer] = useState<
+    Record<string, VoiceParticipant[]>
+  >({});
+  const [activeVoice, setActiveVoice] = useState<ActiveVoiceInfo | null>(null);
 
-  // Check existing session on load (both Local and Firebase Auth)
+  // Feed & Profile
+  const [posts, setPosts] = useState<Post[]>([]);
+  const [feedFilter, setFeedFilter] = useState<'all' | 'video' | 'image' | 'none'>('all');
+  const [viewedProfile, setViewedProfile] = useState<{
+    user: User;
+    isFriend: boolean;
+    friendCount: number;
+    pendingDirection: 'incoming' | 'outgoing' | null;
+  } | null>(null);
+  const [profilePosts, setProfilePosts] = useState<Post[]>([]);
+
+  // Friends & DMs
+  const [friendsData, setFriendsData] = useState<FriendsOverview & { discoverPlayers: User[] }>({
+    friends: [],
+    incomingRequests: [],
+    outgoingRequests: [],
+    discoverPlayers: [],
+  });
+  const [activeDmFriendId, setActiveDmFriendId] = useState<string | null>(null);
+
+  // Modals & Notifications
+  const [isComposerOpen, setIsComposerOpen] = useState(false);
+  const [isNewServerOpen, setIsNewServerOpen] = useState(false);
+  const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
+  const [sharePostTarget, setSharePostTarget] = useState<Post | null>(null);
+  const [forwardMessageTarget, setForwardMessageTarget] = useState<ChatMessage | null>(null);
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Live Refs for WS, Voice Engine, and Notification rules
+  const wsRef = useRef<WebSocket | null>(null);
+  const userRef = useRef<User | null>(user);
+  const preferencesRef = useRef<UserPreferences>(preferences);
+  const activeVoiceRef = useRef<ActiveVoiceInfo | null>(activeVoice);
+  const serversRef = useRef(servers);
+  const reminderTimersRef = useRef<number[]>([]);
+
+  const localStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null);
+  const vadIntervalRef = useRef<number | null>(null);
+  const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const remoteAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+
   useEffect(() => {
-    const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      if (fbUser) {
-        // If signed in with Firebase, sync user state
-        setUser({
-          id: fbUser.uid,
-          email: fbUser.email || '',
-          name: fbUser.displayName || fbUser.email?.split('@')[0] || 'User',
-          role: 'freelancer',
-          createdAt: new Date().toISOString(),
-        });
-        setIsAuthChecking(false);
-      } else {
-        // Otherwise check local token
-        const token = getStoredToken();
-        if (token) {
-          try {
-            const res = await api.getCurrentUser();
-            setUser(res.user);
-          } catch {
-            clearStoredAuth();
-            setUser(null);
-          }
-        }
-        setIsAuthChecking(false);
-      }
-    });
+    userRef.current = user;
+  }, [user]);
+  useEffect(() => {
+    preferencesRef.current = preferences;
+  }, [preferences]);
+  useEffect(() => {
+    activeVoiceRef.current = activeVoice;
+  }, [activeVoice]);
+  useEffect(() => {
+    serversRef.current = servers;
+  }, [servers]);
 
-    return () => unsubscribe();
+  const showToast = useCallback((msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => {
+      setToastMsg((prev) => (prev === msg ? null : prev));
+    }, 3200);
   }, []);
 
-  // Fetch files when user changes or project/sort changes
-  const fetchFiles = async () => {
-    if (!user) return;
-    setIsLoadingFiles(true);
-    setErrorMsg(null);
-    try {
-      const res = await api.getFiles({
-        project: selectedProject === 'all' ? undefined : selectedProject,
-        search: searchQuery.trim() || undefined,
-        sortBy,
-      });
-      setFiles(res.files);
-      setAvailableProjects(res.availableProjects);
-    } catch (err: any) {
-      setErrorMsg(err.message || 'Failed to load files.');
-    } finally {
-      setIsLoadingFiles(false);
+  const sendWs = useCallback((payload: unknown) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify(payload));
     }
-  };
+  }, []);
+
+  // Status-driven incoming message notification handler
+  const dispatchIncomingNotification = useCallback(
+    (msg: ChatMessage) => {
+      const me = userRef.current;
+      if (!me || msg.authorId === me.id) return;
+
+      const status: UserStatus = me.status || 'online';
+      // Do Not Disturb & Invisible suppress desktop popups & notification sounds
+      if (status === 'dnd' || status === 'invisible') {
+        return;
+      }
+
+      const preview =
+        msg.content ||
+        (msg.attachmentType === 'audio'
+          ? 'Sent a voice message'
+          : msg.attachmentType === 'image'
+          ? 'Sent an image'
+          : 'Sent a message');
+
+      showToast(`${msg.authorName}: ${preview}`);
+
+      if (status === 'online') {
+        if (preferencesRef.current.notificationSound) {
+          playNotificationChime();
+        }
+        if (
+          typeof Notification !== 'undefined' &&
+          Notification.permission === 'granted' &&
+          document.hidden
+        ) {
+          try {
+            new Notification(`Pilgrim · ${msg.authorName}`, {
+              body: preview,
+            });
+          } catch {
+            // Ignore browser Notification restrictions
+          }
+        }
+      }
+    },
+    [showToast]
+  );
+
+  // Voice Media Cleanup
+  const cleanupVoiceMedia = useCallback(() => {
+    if (vadIntervalRef.current) {
+      window.clearInterval(vadIntervalRef.current);
+      vadIntervalRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
+    }
+    if (localStreamRef.current) {
+      localStreamRef.current.getTracks().forEach((t) => t.stop());
+      localStreamRef.current = null;
+    }
+    for (const pc of peerConnectionsRef.current.values()) {
+      pc.close();
+    }
+    peerConnectionsRef.current.clear();
+    for (const el of remoteAudioElsRef.current.values()) {
+      el.pause();
+      el.srcObject = null;
+      el.remove();
+    }
+    remoteAudioElsRef.current.clear();
+  }, []);
 
   useEffect(() => {
-    if (user) {
-      fetchFiles();
-    }
-  }, [user, selectedProject, sortBy, searchQuery]);
+    return () => {
+      cleanupVoiceMedia();
+      reminderTimersRef.current.forEach((id) => window.clearTimeout(id));
+    };
+  }, [cleanupVoiceMedia]);
 
-  const handleSignOut = async () => {
-    try {
-      await fbService.signOutUser();
-    } catch (err) {
-      console.warn('Firebase signout:', err);
+  // Keep output volume & deafened state synced across remote audio streams
+  useEffect(() => {
+    const vol = activeVoice?.deafened ? 0 : preferences.voice.outputVolume / 100;
+    for (const el of remoteAudioElsRef.current.values()) {
+      el.volume = Math.max(0, Math.min(1, vol));
+      el.muted = Boolean(activeVoice?.deafened);
     }
-    api.logout();
-    setUser(null);
-    setFiles([]);
-    showToast('You have been signed out successfully.');
-  };
+  }, [activeVoice?.deafened, preferences.voice.outputVolume]);
 
-  const handleUploadSuccess = (newFiles: FileRecord[]) => {
-    setFiles((prev) => [...newFiles, ...prev]);
-    // Sync to Firestore in background
-    newFiles.forEach((f) => {
-      fbService.saveFileRecord(f).catch((e) => console.warn('Firestore file sync:', e));
-      if (!availableProjects.includes(f.project)) {
-        setAvailableProjects((prev) => [...prev, f.project]);
+  // Keep local mic track enabled state synced with mute & PTT/VAD mode
+  const syncMicTransmission = useCallback(
+    (voiceInfo: ActiveVoiceInfo | null) => {
+      if (!voiceInfo) return;
+      const mode = preferencesRef.current.voice.inputMode;
+      const canTransmit = !voiceInfo.muted && (mode === 'vad' || voiceInfo.pttActive);
+      if (localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach((t) => {
+          t.enabled = canTransmit;
+        });
       }
-    });
-    showToast(`${newFiles.length} file(s) uploaded successfully to vault.`);
-  };
+      sendWs({
+        type: 'voice:state',
+        muted: voiceInfo.muted,
+        deafened: voiceInfo.deafened,
+        speaking: voiceInfo.speaking,
+      });
 
-  const handleDeleteFile = async (fileId: string) => {
-    setIsDeleting(true);
-    try {
-      await api.deleteFile(fileId);
-      fbService.deleteFileRecord(fileId).catch((e) => console.warn('Firestore delete sync:', e));
-      setFiles((prev) => prev.filter((f) => f.id !== fileId));
-      if (previewFile?.id === fileId) {
-        setPreviewFile(null);
+      // Also update optimistic local participant list if WS is unavailable
+      const me = userRef.current;
+      if (me) {
+        setVoiceParticipantsByServer((prev) => {
+          const list = prev[voiceInfo.serverId] || [];
+          if (!list.some((p) => p.userId === me.id)) return prev;
+          return {
+            ...prev,
+            [voiceInfo.serverId]: list.map((p) =>
+              p.userId === me.id
+                ? {
+                    ...p,
+                    muted: voiceInfo.muted,
+                    deafened: voiceInfo.deafened,
+                    speaking: voiceInfo.speaking,
+                  }
+                : p
+            ),
+          };
+        });
       }
-      setDeleteCandidate(null);
-      showToast('File deleted successfully.');
-    } catch (err: any) {
-      showToast(err.message || 'Failed to delete file.');
-    } finally {
-      setIsDeleting(false);
-    }
-  };
+    },
+    [sendWs]
+  );
 
-  const handleDownload = async (file: FileRecord) => {
+  // Create/get WebRTC PeerConnection for a peer in the same voice channel
+  const getOrCreatePeerConnection = useCallback(
+    (peerUserId: string, channelId: string) => {
+      const existing = peerConnectionsRef.current.get(peerUserId);
+      if (existing) return existing;
+
+      const pc = new RTCPeerConnection({
+        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+      });
+
+      if (localStreamRef.current) {
+        localStreamRef.current.getAudioTracks().forEach((track) => {
+          pc.addTrack(track, localStreamRef.current!);
+        });
+      }
+
+      pc.onicecandidate = (ev) => {
+        if (ev.candidate) {
+          sendWs({
+            type: 'voice:signal',
+            targetUserId: peerUserId,
+            channelId,
+            signal: { candidate: ev.candidate },
+          });
+        }
+      };
+
+      pc.ontrack = (ev) => {
+        let audioEl = remoteAudioElsRef.current.get(peerUserId);
+        if (!audioEl) {
+          audioEl = document.createElement('audio');
+          audioEl.autoplay = true;
+          remoteAudioElsRef.current.set(peerUserId, audioEl);
+        }
+        audioEl.srcObject = ev.streams[0];
+        const voiceState = activeVoiceRef.current;
+        audioEl.muted = Boolean(voiceState?.deafened);
+        audioEl.volume = voiceState?.deafened
+          ? 0
+          : Math.max(0, Math.min(1, preferencesRef.current.voice.outputVolume / 100));
+        audioEl.play().catch(() => {});
+      };
+
+      peerConnectionsRef.current.set(peerUserId, pc);
+      return pc;
+    },
+    [sendWs]
+  );
+
+  // Apply & persist appearance preferences (Dark Mode, Letter Sizing, Spaces)
+  useEffect(() => {
+    const root = document.documentElement;
+    root.classList.toggle('dark', preferences.theme === 'dark');
+
+    const fontSizeMap: Record<UserPreferences['fontSize'], string> = {
+      compact: '14px',
+      standard: '16px',
+      large: '18px',
+      xlarge: '20px',
+    };
+    root.style.fontSize = fontSizeMap[preferences.fontSize];
+
+    const letterSpacingMap: Record<UserPreferences['letterSpacing'], string> = {
+      tight: '-0.015em',
+      normal: '0em',
+      relaxed: '0.02em',
+      wide: '0.05em',
+    };
+    root.style.setProperty('--pilgrim-letter-spacing', letterSpacingMap[preferences.letterSpacing]);
+    root.setAttribute('data-spacing', preferences.contentSpacing);
+
     try {
-      showToast(`Starting download: ${file.originalName}...`);
-      await downloadAuthenticatedFile(file.id, file.originalName);
-      // update file download counter locally
-      setFiles((prev) =>
-        prev.map((f) => (f.id === file.id ? { ...f, downloadsCount: (f.downloadsCount || 0) + 1 } : f))
+      localStorage.setItem(PREFERENCES_STORAGE_KEY, JSON.stringify(preferences));
+    } catch {
+      // Ignore storage quota issues
+    }
+  }, [preferences]);
+
+  // Verify existing auth session
+  useEffect(() => {
+    const token = getStoredToken();
+    if (!token) {
+      setAuthChecking(false);
+      return;
+    }
+    api
+      .getMe()
+      .then((res) => setUser(res.user))
+      .catch(() => {
+        clearStoredAuth();
+        setUser(null);
+      })
+      .finally(() => setAuthChecking(false));
+  }, []);
+
+  const loadServers = useCallback(async (q = '') => {
+    const res = await api.getServers(q);
+    setServers(res.servers);
+  }, []);
+
+  const loadPosts = useCallback(async () => {
+    const res = await api.getPosts({ scope: 'feed' });
+    setPosts(res.posts);
+  }, []);
+
+  const loadFriends = useCallback(async () => {
+    const res = await api.getFriends();
+    setFriendsData(res);
+  }, []);
+
+  // Initial Data Load when signed in
+  useEffect(() => {
+    if (!user) return;
+    loadServers(serverSearch);
+    loadPosts();
+    loadFriends();
+  }, [user?.id]);
+
+  // Live server search
+  useEffect(() => {
+    if (!user) return;
+    const timer = setTimeout(() => {
+      loadServers(serverSearch);
+    }, 150);
+    return () => clearTimeout(timer);
+  }, [serverSearch, user?.id, loadServers]);
+
+  // Load initial voice participants when opening a server
+  useEffect(() => {
+    if (!user || !selectedServerId) return;
+    api
+      .getVoiceParticipants(selectedServerId)
+      .then((res) => {
+        if (res.participants.length > 0) {
+          setVoiceParticipantsByServer((prev) => ({
+            ...prev,
+            [selectedServerId]: res.participants,
+          }));
+        }
+      })
+      .catch(() => {});
+  }, [user?.id, selectedServerId]);
+
+  // WebSocket Connection for Real-Time Chat, Presence, and Voice Channels
+  useEffect(() => {
+    if (!user) return;
+    const token = getStoredToken();
+    if (!token || token.startsWith('local_token:')) return;
+
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const ws = new WebSocket(`${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`);
+    wsRef.current = ws;
+
+    ws.onmessage = async (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.type === 'presence:update') {
+          setOnlineUserIds(data.onlineUserIds || []);
+        } else if (data.type === 'presence:status' && data.userId) {
+          setFriendsData((prev) => ({
+            ...prev,
+            friends: prev.friends.map((f) =>
+              f.id === data.userId ? { ...f, status: data.status } : f
+            ),
+          }));
+        } else if (data.type === 'chat:message' && data.message) {
+          setIncomingWsMessage(data.message);
+          dispatchIncomingNotification(data.message);
+        } else if (data.type === 'chat:message_updated' && data.message) {
+          setIncomingWsUpdatedMessage(data.message);
+        } else if (data.type === 'chat:message_deleted' && data.messageId) {
+          setIncomingWsDeletedMessageId(data.messageId);
+        } else if (
+          data.type === 'server:created' ||
+          data.type === 'server:channel_created' ||
+          data.type === 'server:updated'
+        ) {
+          loadServers(serverSearch);
+        } else if (data.type === 'friend:update') {
+          loadFriends();
+          loadPosts();
+        } else if (data.type === 'voice:participants' && data.serverId) {
+          const participants: VoiceParticipant[] = data.participants || [];
+          setVoiceParticipantsByServer((prev) => ({
+            ...prev,
+            [data.serverId]: participants,
+          }));
+
+          // Initiate WebRTC offers cleanly if connected to the same voice channel
+          const currentVoice = activeVoiceRef.current;
+          const me = userRef.current;
+          if (currentVoice && me && currentVoice.serverId === data.serverId) {
+            const peersInRoom = participants.filter(
+              (p) => p.channelId === currentVoice.channelId && p.userId !== me.id
+            );
+            for (const peer of peersInRoom) {
+              if (!peerConnectionsRef.current.has(peer.userId) && me.id < peer.userId) {
+                const pc = getOrCreatePeerConnection(peer.userId, currentVoice.channelId);
+                try {
+                  const offer = await pc.createOffer();
+                  await pc.setLocalDescription(offer);
+                  sendWs({
+                    type: 'voice:signal',
+                    targetUserId: peer.userId,
+                    channelId: currentVoice.channelId,
+                    signal: { sdp: pc.localDescription },
+                  });
+                } catch {
+                  // Ignore signaling race
+                }
+              }
+            }
+          }
+        } else if (data.type === 'voice:signal' && data.fromUserId && data.signal) {
+          const currentVoice = activeVoiceRef.current;
+          if (!currentVoice || currentVoice.channelId !== data.channelId) return;
+          const pc = getOrCreatePeerConnection(data.fromUserId, data.channelId);
+          try {
+            if (data.signal.sdp) {
+              await pc.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
+              if (data.signal.sdp.type === 'offer') {
+                const answer = await pc.createAnswer();
+                await pc.setLocalDescription(answer);
+                sendWs({
+                  type: 'voice:signal',
+                  targetUserId: data.fromUserId,
+                  channelId: data.channelId,
+                  signal: { sdp: pc.localDescription },
+                });
+              }
+            } else if (data.signal.candidate) {
+              await pc.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+            }
+          } catch {
+            // Ignore transient ICE errors
+          }
+        }
+      } catch {
+        // Ignore malformed packets
+      }
+    };
+
+    return () => {
+      if (wsRef.current === ws) wsRef.current = null;
+      ws.close();
+    };
+  }, [user?.id, loadServers, loadFriends, loadPosts, serverSearch, dispatchIncomingNotification, getOrCreatePeerConnection, sendWs]);
+
+  // Desktop Push-to-Talk Keyboard Listener
+  const handlePttHoldStart = useCallback(() => {
+    const current = activeVoiceRef.current;
+    const me = userRef.current;
+    if (!current || !me || preferencesRef.current.voice.inputMode !== 'ptt') return;
+    const srv = serversRef.current.find((s) => s.id === current.serverId);
+    if (srv && !hasServerPermission(srv, me.id, 'speakVoice')) return;
+    if (current.pttActive) return;
+
+    const next: ActiveVoiceInfo = {
+      ...current,
+      pttActive: true,
+      speaking: !current.muted,
+    };
+    setActiveVoice(next);
+    syncMicTransmission(next);
+  }, [syncMicTransmission]);
+
+  const handlePttHoldEnd = useCallback(() => {
+    const current = activeVoiceRef.current;
+    if (!current || !current.pttActive) return;
+    const next: ActiveVoiceInfo = {
+      ...current,
+      pttActive: false,
+      speaking: false,
+    };
+    setActiveVoice(next);
+    syncMicTransmission(next);
+  }, [syncMicTransmission]);
+
+  useEffect(() => {
+    const isTypingInInput = (el: EventTarget | null) => {
+      if (!(el instanceof HTMLElement)) return false;
+      const tag = el.tagName;
+      return (
+        tag === 'INPUT' ||
+        tag === 'TEXTAREA' ||
+        tag === 'SELECT' ||
+        el.isContentEditable
       );
-    } catch (err: any) {
-      showToast(err.message || 'Download failed.');
-    }
-  };
+    };
 
-  const handleInlineFileSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files.length > 0) {
-      const selected = Array.from(e.target.files);
-      try {
-        showToast(`Uploading ${selected.length} file(s)...`);
-        const res = await api.uploadFiles(selected, {
-          project: selectedProject === 'all' ? 'Client Deliverables' : selectedProject,
-        });
-        handleUploadSuccess(res.files);
-      } catch (err: any) {
-        showToast(err.message || 'Upload failed.');
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.repeat) return;
+      if (!activeVoiceRef.current || preferencesRef.current.voice.inputMode !== 'ptt') return;
+      if (isTypingInInput(e.target)) return;
+      if (e.code === preferencesRef.current.voice.pttKey) {
+        e.preventDefault();
+        handlePttHoldStart();
       }
-      // reset input
-      if (inlineFileInputRef.current) inlineFileInputRef.current.value = '';
-    }
-  };
+    };
 
-  const handleInlineDrop = async (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDraggingOverArea(false);
-    if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
-      const selected = Array.from(e.dataTransfer.files);
-      try {
-        showToast(`Uploading ${selected.length} file(s)...`);
-        const res = await api.uploadFiles(selected, {
-          project: selectedProject === 'all' ? 'Client Deliverables' : selectedProject,
-        });
-        handleUploadSuccess(res.files);
-      } catch (err: any) {
-        showToast(err.message || 'Upload failed.');
+    const onKeyUp = (e: KeyboardEvent) => {
+      if (!activeVoiceRef.current) return;
+      if (e.code === preferencesRef.current.voice.pttKey) {
+        handlePttHoldEnd();
       }
+    };
+
+    window.addEventListener('keydown', onKeyDown);
+    window.addEventListener('keyup', onKeyUp);
+    window.addEventListener('blur', handlePttHoldEnd);
+    return () => {
+      window.removeEventListener('keydown', onKeyDown);
+      window.removeEventListener('keyup', onKeyUp);
+      window.removeEventListener('blur', handlePttHoldEnd);
+    };
+  }, [handlePttHoldStart, handlePttHoldEnd]);
+
+  const handleJoinVoiceChannel = async (server: Server, channel: Channel) => {
+    if (!user) return;
+    if (!hasServerPermission(server, user.id, 'connectVoice')) {
+      showToast('Your server role does not allow joining voice channels.');
+      return;
     }
+
+    const canSpeak = hasServerPermission(server, user.id, 'speakVoice');
+    cleanupVoiceMedia();
+
+    const nextVoice: ActiveVoiceInfo = {
+      serverId: server.id,
+      serverName: server.name,
+      channelId: channel.id,
+      channelName: channel.name,
+      muted: !canSpeak,
+      deafened: false,
+      speaking: false,
+      pttActive: false,
+    };
+    setActiveVoice(nextVoice);
+
+    // Try capturing microphone with user's configured audio filters
+    try {
+      if (navigator.mediaDevices?.getUserMedia) {
+        const vs = preferencesRef.current.voice;
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            deviceId: vs.inputDeviceId ? { exact: vs.inputDeviceId } : undefined,
+            noiseSuppression: vs.noiseSuppression,
+            echoCancellation: vs.echoCancellation,
+          },
+        });
+        localStreamRef.current = stream;
+
+        const initialTransmit = !nextVoice.muted && vs.inputMode === 'vad';
+        stream.getAudioTracks().forEach((t) => {
+          t.enabled = initialTransmit;
+        });
+
+        const Ctx =
+          window.AudioContext ||
+          (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+        if (Ctx) {
+          const ctx = new Ctx();
+          audioCtxRef.current = ctx;
+          const source = ctx.createMediaStreamSource(stream);
+          const analyser = ctx.createAnalyser();
+          analyser.fftSize = 256;
+          source.connect(analyser);
+
+          const dataArr = new Uint8Array(analyser.frequencyBinCount);
+          vadIntervalRef.current = window.setInterval(() => {
+            const cur = activeVoiceRef.current;
+            if (!cur) return;
+            const mode = preferencesRef.current.voice.inputMode;
+            if (mode !== 'vad' || cur.muted) return;
+
+            analyser.getByteFrequencyData(dataArr);
+            let sum = 0;
+            for (let i = 0; i < dataArr.length; i++) sum += dataArr[i];
+            const avg = sum / dataArr.length;
+            const threshold = Math.max(4, (100 - preferencesRef.current.voice.sensitivity) * 0.45);
+            const isSpeaking = avg > threshold;
+
+            if (isSpeaking !== cur.speaking) {
+              const updated = { ...cur, speaking: isSpeaking };
+              setActiveVoice(updated);
+              syncMicTransmission(updated);
+            }
+          }, 160);
+        }
+      }
+    } catch {
+      showToast('Joined voice in listen-only mode (no microphone access).');
+    }
+
+    // Optimistic local participant entry (ensures voice UI works even in local fallback mode)
+    setVoiceParticipantsByServer((prev) => {
+      const cleaned: Record<string, VoiceParticipant[]> = {};
+      for (const [sid, list] of Object.entries(prev)) {
+        cleaned[sid] = list.filter((p) => p.userId !== user.id);
+      }
+      const existing = cleaned[server.id] || [];
+      cleaned[server.id] = [
+        ...existing,
+        {
+          userId: user.id,
+          userName: user.name,
+          userAvatar: user.avatarUrl,
+          serverId: server.id,
+          channelId: channel.id,
+          muted: nextVoice.muted,
+          deafened: false,
+          speaking: false,
+        },
+      ];
+      return cleaned;
+    });
+
+    sendWs({
+      type: 'voice:join',
+      serverId: server.id,
+      channelId: channel.id,
+      muted: nextVoice.muted,
+      deafened: false,
+    });
+    showToast(`Joined voice channel: ${channel.name}`);
   };
 
-  // Filter by category in client side
-  const filteredFiles = useMemo(() => {
-    let result = files;
-
-    if (activeNav === 'recent') {
-      // files from last 7 days
-      const sevenDaysAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
-      result = result.filter((f) => new Date(f.uploadedAt).getTime() >= sevenDaysAgo);
-    }
-
-    if (selectedCategory !== 'all') {
-      result = result.filter((f) => {
-        const cat = getFileCategory(f.mimeType, f.originalName);
-        if (selectedCategory === 'images') return cat === 'image';
-        if (selectedCategory === 'documents') return cat === 'pdf' || cat === 'document';
-        if (selectedCategory === 'archives') return cat === 'archive';
-        if (selectedCategory === 'code') return cat === 'code';
-        return true;
+  const handleLeaveVoice = useCallback(() => {
+    const me = userRef.current;
+    sendWs({ type: 'voice:leave' });
+    cleanupVoiceMedia();
+    setActiveVoice(null);
+    if (me) {
+      setVoiceParticipantsByServer((prev) => {
+        const next: Record<string, VoiceParticipant[]> = {};
+        for (const [sid, list] of Object.entries(prev)) {
+          next[sid] = list.filter((p) => p.userId !== me.id);
+        }
+        return next;
       });
     }
+    showToast('Disconnected from voice channel.');
+  }, [cleanupVoiceMedia, sendWs, showToast]);
 
-    return result;
-  }, [files, selectedCategory, activeNav]);
+  const handleToggleVoiceMute = () => {
+    if (!activeVoice || !user) return;
+    const srv = servers.find((s) => s.id === activeVoice.serverId);
+    if (activeVoice.muted && srv && !hasServerPermission(srv, user.id, 'speakVoice')) {
+      showToast('Your role does not allow speaking in voice channels.');
+      return;
+    }
+    const nextMuted = !activeVoice.muted;
+    const next: ActiveVoiceInfo = {
+      ...activeVoice,
+      muted: nextMuted,
+      speaking: nextMuted ? false : activeVoice.speaking,
+      pttActive: nextMuted ? false : activeVoice.pttActive,
+    };
+    setActiveVoice(next);
+    syncMicTransmission(next);
+  };
 
-  const totalVaultBytes = useMemo(() => {
-    return files.reduce((acc, f) => acc + f.size, 0);
-  }, [files]);
+  const handleToggleVoiceDeafen = () => {
+    if (!activeVoice) return;
+    const nextDeafened = !activeVoice.deafened;
+    const next: ActiveVoiceInfo = {
+      ...activeVoice,
+      deafened: nextDeafened,
+      muted: nextDeafened ? true : activeVoice.muted,
+      speaking: nextDeafened ? false : activeVoice.speaking,
+    };
+    setActiveVoice(next);
+    syncMicTransmission(next);
+  };
 
-  // Loading Screen
-  if (isAuthChecking) {
+  const handleAuthSuccess = (authenticatedUser: User, newSignup = false) => {
+    setUser(authenticatedUser);
+    setIsNewSignup(newSignup);
+    setActiveView('startup');
+  };
+
+  const handleSignOut = () => {
+    handleLeaveVoice();
+    api.logout();
+    setUser(null);
+    setPosts([]);
+    setServers([]);
+    setSelectedServerId(null);
+    showToast('You have been signed out.');
+  };
+
+  const handleChangeStatus = async (status: UserStatus) => {
+    try {
+      const res = await api.updateStatus(status);
+      setUser(res.user);
+      if (status === 'online') {
+        showToast('Status set to Online.');
+        if (typeof Notification !== 'undefined' && Notification.permission === 'default') {
+          Notification.requestPermission().catch(() => {});
+        }
+      } else if (status === 'idle') {
+        showToast('Status set to Idle — subtle notifications active.');
+      } else if (status === 'dnd') {
+        showToast('Status set to Do Not Disturb — desktop notifications muted.');
+      } else {
+        showToast('Status set to Invisible — you will appear offline.');
+      }
+    } catch (err: any) {
+      showToast(err?.message || 'Could not update status.');
+    }
+  };
+
+  const handleSpeakMessage = (msg: ChatMessage) => {
+    const text = msg.content || `${msg.authorName} sent an attachment.`;
+    if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+      window.speechSynthesis.cancel();
+      const utter = new SpeechSynthesisUtterance(`${msg.authorName} says: ${text}`);
+      window.speechSynthesis.speak(utter);
+      showToast('Speaking message...');
+    } else {
+      showToast('Text-to-speech is not available in this browser.');
+    }
+  };
+
+  const handleCreateReminder = (msg: ChatMessage, minutes: number) => {
+    const preview = msg.content || '[Attachment]';
+    const timerId = window.setTimeout(() => {
+      const me = userRef.current;
+      if (me && me.status !== 'dnd') {
+        showToast(`Reminder (${msg.authorName}): ${preview}`);
+        if (preferencesRef.current.notificationSound && me.status === 'online') {
+          playNotificationChime();
+        }
+      }
+    }, minutes * 60 * 1000);
+    reminderTimersRef.current.push(timerId);
+    showToast(`Reminder set for ${minutes} minute${minutes === 1 ? '' : 's'}.`);
+  };
+
+  const openProfileById = async (targetUserId: string) => {
+    if (!user) return;
+    const [profileRes, postsRes] = await Promise.all([
+      api.getUserProfile(targetUserId),
+      api.getPosts({ scope: 'profile', userId: targetUserId }),
+    ]);
+    setViewedProfile(profileRes);
+    setProfilePosts(postsRes.posts);
+    setActiveView('profile');
+  };
+
+  const handlePostCreated = (newPost: Post) => {
+    setPosts((prev) => [newPost, ...prev]);
+    if (viewedProfile && viewedProfile.user.id === newPost.authorId) {
+      setProfilePosts((prev) => [newPost, ...prev]);
+    }
+    showToast('Post published!');
+  };
+
+  const handleLike = async (postId: string) => {
+    const res = await api.toggleLike(postId);
+    const updateList = (list: Post[]) =>
+      list.map((p) => (p.id === postId ? { ...p, likes: res.likes } : p));
+    setPosts(updateList);
+    setProfilePosts(updateList);
+  };
+
+  const handleComment = async (postId: string, content: string, parentCommentId?: string) => {
+    const res = await api.addComment(postId, content, parentCommentId);
+    const updateList = (list: Post[]) =>
+      list.map((p) => (p.id === postId ? { ...p, comments: res.comments } : p));
+    setPosts(updateList);
+    setProfilePosts(updateList);
+  };
+
+  const handleEditComment = async (postId: string, commentId: string, content: string) => {
+    const res = await api.editComment(postId, commentId, content);
+    const updateList = (list: Post[]) =>
+      list.map((p) => (p.id === postId ? { ...p, comments: res.comments } : p));
+    setPosts(updateList);
+    setProfilePosts(updateList);
+    showToast('Comment updated.');
+  };
+
+  const handleReactComment = async (postId: string, commentId: string, emoji: string) => {
+    const res = await api.reactComment(postId, commentId, emoji);
+    const updateList = (list: Post[]) =>
+      list.map((p) => (p.id === postId ? { ...p, comments: res.comments } : p));
+    setPosts(updateList);
+    setProfilePosts(updateList);
+  };
+
+  const handleHideComment = async (postId: string, commentId: string) => {
+    const res = await api.toggleHideComment(postId, commentId);
+    const updateList = (list: Post[]) =>
+      list.map((p) => (p.id === postId ? { ...p, comments: res.comments } : p));
+    setPosts(updateList);
+    setProfilePosts(updateList);
+    showToast(res.hidden ? 'Comment hidden.' : 'Comment unhidden.');
+  };
+
+  const handleDeleteComment = async (postId: string, commentId: string) => {
+    const res = await api.deleteComment(postId, commentId);
+    const updateList = (list: Post[]) =>
+      list.map((p) => (p.id === postId ? { ...p, comments: res.comments } : p));
+    setPosts(updateList);
+    setProfilePosts(updateList);
+    showToast('Comment deleted.');
+  };
+
+  const handleBlockUser = async (targetUserId: string, targetUserName: string) => {
+    const res = await api.toggleBlockUser(targetUserId);
+    setUser((prev) => (prev ? { ...prev, blockedUserIds: res.blockedUserIds } : prev));
+    await loadPosts();
+    if (viewedProfile) {
+      const postsRes = await api.getPosts({ scope: 'profile', userId: viewedProfile.user.id });
+      setProfilePosts(postsRes.posts);
+    }
+    showToast(res.blocked ? `Blocked ${targetUserName}.` : `Unblocked ${targetUserName}.`);
+  };
+
+  const handleChangeVisibility = async (postId: string, visibility: Visibility) => {
+    const res = await api.updatePost(postId, { visibility });
+    const updateList = (list: Post[]) => list.map((p) => (p.id === postId ? res.post : p));
+    setPosts(updateList);
+    setProfilePosts(updateList);
+    showToast(`Post visibility set to ${visibility}.`);
+  };
+
+  const handleDeletePost = async (postId: string) => {
+    await api.deletePost(postId);
+    setPosts((prev) => prev.filter((p) => p.id !== postId));
+    setProfilePosts((prev) => prev.filter((p) => p.id !== postId));
+    showToast('Post deleted.');
+  };
+
+  const handleJoinServer = async (serverId: string) => {
+    const res = await api.joinServer(serverId);
+    setServers((prev) => prev.map((s) => (s.id === serverId ? res.server : s)));
+    setSelectedServerId(serverId);
+    setActiveView('server');
+    showToast(`Joined ${res.server.name}!`);
+  };
+
+  const handleSendFriendRequest = async (identifier: string) => {
+    try {
+      const res = await api.sendFriendRequest(identifier);
+      showToast(res.message);
+      await loadFriends();
+      if (viewedProfile) {
+        const refreshed = await api.getUserProfile(viewedProfile.user.id);
+        setViewedProfile(refreshed);
+      }
+    } catch (err: any) {
+      showToast(err.message || 'Could not send friend request.');
+    }
+  };
+
+  const handleRespondRequest = async (requestId: string, action: 'accept' | 'decline') => {
+    await api.respondFriendRequest(requestId, action);
+    showToast(action === 'accept' ? 'Friend request accepted!' : 'Friend request declined.');
+    await Promise.all([loadFriends(), loadPosts()]);
+  };
+
+  const handleRemoveFriend = async (friendId: string) => {
+    await api.removeFriend(friendId);
+    if (activeDmFriendId === friendId) setActiveDmFriendId(null);
+    showToast('Friend removed.');
+    await Promise.all([loadFriends(), loadPosts()]);
+  };
+
+  if (authChecking) {
     return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-3 border-blue-600/30 border-t-blue-600 rounded-full animate-spin" />
-          <span className="text-xs font-semibold text-slate-600 tracking-wide">
-            Loading FeliVault...
-          </span>
-        </div>
+      <div className="min-h-screen bg-[#f4f4f5] dark:bg-zinc-950 flex items-center justify-center">
+        <div className="w-8 h-8 border-2 border-zinc-300 dark:border-zinc-700 border-t-zinc-950 dark:border-t-white rounded-full animate-spin" />
       </div>
     );
   }
 
-  // Not signed in: Show clean, friendly Auth Screen
   if (!user) {
-    return <AuthScreen onAuthSuccess={(authenticatedUser) => setUser(authenticatedUser)} />;
+    return <AuthScreen onAuthSuccess={handleAuthSuccess} />;
   }
 
-  const activeBreadcrumbTitle =
-    activeNav === 'recent'
-      ? 'Recent Uploads'
-      : selectedProject === 'all'
-      ? 'All Files'
-      : selectedProject;
+  const activeServer = servers.find((s) => s.id === selectedServerId) || null;
+
+  const getHeaderTitle = () => {
+    if (activeView === 'startup') return 'Welcome & Features';
+    if (activeView === 'feed') return 'Community Feed';
+    if (activeView === 'friends') return 'Friends & Direct Messages';
+    if (activeView === 'settings') return 'Appearance, Voice & Account';
+    if (activeView === 'safety') return 'Safety & Reports';
+    if (activeView === 'profile') return viewedProfile?.user.name || 'Profile Dashboard';
+    if (activeView === 'server') return activeServer?.name || 'Server Chat';
+    return 'Pilgrim';
+  };
+
+  const filteredFeedPosts = posts.filter((p) => {
+    if (feedFilter === 'all') return true;
+    return p.mediaType === feedFilter;
+  });
 
   return (
-    <div className="min-h-screen bg-[#f8fafc] text-slate-800 flex">
+    <div className="min-h-screen bg-[#f4f4f5] dark:bg-zinc-950 text-zinc-950 dark:text-zinc-100 flex transition-colors">
       {/* Toast Notification */}
-      {toastMsg && (
-        <div className="fixed bottom-5 right-5 z-50 bg-[#0A1128] text-white px-4 py-2.5 rounded-xl shadow-lg border border-slate-700 text-xs flex items-center gap-2 animate-fade-in">
-          <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
-          <span>{toastMsg}</span>
-        </div>
-      )}
+      <AnimatePresence>
+        {toastMsg && (
+          <motion.div
+            initial={{ opacity: 0, y: 16 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 12 }}
+            className="fixed bottom-5 right-5 z-50 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 px-4 py-2.5 rounded-xl shadow-lg border border-zinc-800 dark:border-zinc-200 text-xs font-medium flex items-center gap-2 max-w-sm"
+          >
+            <CheckCircle2 className="w-4 h-4 text-zinc-300 dark:text-zinc-700 shrink-0" />
+            <span className="truncate">{toastMsg}</span>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
-      {/* Dark Navy Sidebar */}
+      {/* Black Sidebar */}
       <Sidebar
         user={user}
-        activeNav={activeNav}
-        setActiveNav={setActiveNav}
-        selectedProject={selectedProject}
-        setSelectedProject={setSelectedProject}
-        projects={availableProjects}
-        totalBytes={totalVaultBytes}
-        fileCount={files.length}
-        onOpenUpload={() => setIsUploadOpen(true)}
-        onOpenShareModal={() => {
-          setShareCandidate(null);
-          setIsShareModalOpen(true);
+        activeView={activeView}
+        onNavigate={(view) => {
+          if (view === 'settings') setSettingsFocusSection('appearance');
+          setActiveView(view);
         }}
-        onSignOut={handleSignOut}
+        servers={servers}
+        serverSearch={serverSearch}
+        setServerSearch={setServerSearch}
+        selectedServerId={selectedServerId}
+        onSelectServer={(sid) => {
+          setSelectedServerId(sid);
+          setActiveView('server');
+        }}
+        onJoinServer={handleJoinServer}
+        onOpenNewServerModal={() => setIsNewServerOpen(true)}
+        onOpenMyProfile={() => openProfileById(user.id)}
+        onChangeStatus={handleChangeStatus}
+        pendingFriendCount={friendsData.incomingRequests.length}
         isMobileOpen={isMobileSidebarOpen}
         setIsMobileOpen={setIsMobileSidebarOpen}
+        activeVoice={activeVoice}
+        voiceSettings={preferences.voice}
+        onToggleVoiceMute={handleToggleVoiceMute}
+        onToggleVoiceDeafen={handleToggleVoiceDeafen}
+        onPttHoldStart={handlePttHoldStart}
+        onPttHoldEnd={handlePttHoldEnd}
+        onLeaveVoice={handleLeaveVoice}
+        onOpenVoiceSettings={() => {
+          setSettingsFocusSection('voice');
+          setActiveView('settings');
+        }}
       />
 
-      {/* Main Content Area: White & Light Gray Canvas */}
-      <div className="flex-1 flex flex-col min-w-0 lg:pl-64">
-        {/* Top Bar Header */}
+      {/* Main White / Light Gray (or Dark) Workspace */}
+      <div className="flex-1 flex flex-col min-w-0 lg:pl-[308px]">
         <TopBar
-          activeTitle={activeBreadcrumbTitle}
-          searchQuery={searchQuery}
-          setSearchQuery={setSearchQuery}
-          onOpenUpload={() => setIsUploadOpen(true)}
+          title={getHeaderTitle()}
+          activeView={activeView}
+          onOpenComposer={() => setIsComposerOpen(true)}
+          onOpenNewServer={() => setIsNewServerOpen(true)}
+          onOpenAddFriend={() => setActiveView('friends')}
           isMobileOpen={isMobileSidebarOpen}
           setIsMobileOpen={setIsMobileSidebarOpen}
         />
 
-        {/* Dashboard Main Viewport */}
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-7xl w-full mx-auto space-y-6">
-          {/* Quick Upload Drop Area */}
-          <div
-            onDragOver={(e) => {
-              e.preventDefault();
-              setIsDraggingOverArea(true);
-            }}
-            onDragLeave={(e) => {
-              e.preventDefault();
-              setIsDraggingOverArea(false);
-            }}
-            onDrop={handleInlineDrop}
-            className={`bg-white border rounded-2xl p-6 transition-all ${
-              isDraggingOverArea
-                ? 'border-blue-500 bg-blue-50/40 ring-4 ring-blue-500/10'
-                : 'border-slate-200 hover:border-slate-300 shadow-xs'
-            }`}
-          >
-            <input
-              ref={inlineFileInputRef}
-              type="file"
-              multiple
-              onChange={handleInlineFileSelect}
-              className="hidden"
+        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">
+          {activeView === 'startup' && (
+            <StartupPage
+              user={user}
+              isNewSignup={isNewSignup}
+              onNavigate={(view) => setActiveView(view)}
+              onOpenMyProfile={() => openProfileById(user.id)}
+              onOpenNewServer={() => setIsNewServerOpen(true)}
             />
-            <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-              <div className="flex items-center gap-4 text-center sm:text-left">
-                <div className="w-12 h-12 rounded-xl bg-blue-50 text-blue-600 flex items-center justify-center shrink-0">
-                  <UploadCloud className="w-6 h-6" />
-                </div>
-                <div>
-                  <h2 className="text-sm font-semibold text-slate-900">
-                    Client File Dropzone
-                  </h2>
-                  <p className="text-xs text-slate-500 mt-0.5">
-                    Drag and drop deliverables directly here, or browse from your device.
-                  </p>
-                </div>
-              </div>
+          )}
 
-              <div className="flex items-center gap-2.5 w-full sm:w-auto">
+          {activeView === 'feed' && (
+            <div className="pilgrim-stack max-w-3xl mx-auto">
+              {/* Quick Post Banner */}
+              <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl pilgrim-card-pad flex flex-col sm:flex-row sm:items-center justify-between gap-4 transition-colors">
+                <div className="flex items-center gap-3">
+                  <img
+                    src={user.avatarUrl}
+                    alt={user.name}
+                    onError={(e) => {
+                      (e.target as HTMLImageElement).src = makeInitialsAvatar(user.name);
+                    }}
+                    className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-700 shrink-0"
+                  />
+                  <div>
+                    <p className="text-sm font-bold text-zinc-950 dark:text-zinc-50">
+                      Share with the Pilgrim Community
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400">
+                      Upload a video, image, or thought — Public, Friends-Only, or Private.
+                    </p>
+                  </div>
+                </div>
                 <button
                   type="button"
-                  onClick={() => inlineFileInputRef.current?.click()}
-                  className="flex-1 sm:flex-none py-2 px-3.5 bg-slate-100 hover:bg-slate-200 text-slate-800 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
-                >
-                  Quick Browse Files
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setIsUploadOpen(true)}
-                  className="flex-1 sm:flex-none py-2 px-3.5 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-xs cursor-pointer"
+                  onClick={() => setIsComposerOpen(true)}
+                  className="py-2 px-4 bg-zinc-950 hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 text-white dark:text-zinc-950 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 whitespace-nowrap cursor-pointer"
                 >
                   <Plus className="w-3.5 h-3.5" />
-                  <span>Upload with Details</span>
+                  <span>New Post</span>
                 </button>
               </div>
-            </div>
-          </div>
 
-          {/* Controls & Filter Strip */}
-          <div className="flex flex-col md:flex-row items-start md:items-center justify-between gap-4 pt-1">
-            {/* Interactive Category Segmented Controls */}
-            <div className="flex items-center gap-1 p-1 bg-slate-200/70 rounded-xl overflow-x-auto max-w-full">
-              {[
-                { id: 'all', label: 'All Files' },
-                { id: 'documents', label: 'PDFs & Docs' },
-                { id: 'images', label: 'Design & Images' },
-                { id: 'archives', label: 'Archives (ZIP)' },
-              ].map((tab) => (
-                <button
-                  key={tab.id}
-                  type="button"
-                  onClick={() => setSelectedCategory(tab.id)}
-                  className={`px-3 py-1.5 text-xs font-semibold rounded-lg transition-all whitespace-nowrap cursor-pointer ${
-                    selectedCategory === tab.id
-                      ? 'bg-white text-slate-900 shadow-xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  {tab.label}
-                </button>
-              ))}
-            </div>
-
-            {/* Right Controls: Sort & Layout Toggle */}
-            <div className="flex items-center gap-2.5 w-full md:w-auto justify-between md:justify-end">
-              {/* Project Filter Select */}
-              <div className="relative">
-                <select
-                  value={selectedProject}
-                  onChange={(e) => setSelectedProject(e.target.value)}
-                  className="py-1.5 pl-2.5 pr-7 text-xs bg-white border border-slate-200 rounded-lg text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer shadow-xs"
-                >
-                  <option value="all">All Projects</option>
-                  {availableProjects.map((proj) => (
-                    <option key={proj} value={proj}>
-                      {proj}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              {/* Sort Order Select */}
-              <div className="relative">
-                <select
-                  value={sortBy}
-                  onChange={(e) => setSortBy(e.target.value)}
-                  className="py-1.5 pl-2.5 pr-7 text-xs bg-white border border-slate-200 rounded-lg text-slate-700 font-medium focus:outline-none focus:ring-1 focus:ring-blue-500 cursor-pointer shadow-xs"
-                >
-                  <option value="date_desc">Newest First</option>
-                  <option value="date_asc">Oldest First</option>
-                  <option value="name_asc">Name (A-Z)</option>
-                  <option value="size_desc">Size (Largest)</option>
-                </select>
-              </div>
-
-              {/* View Mode Toggle */}
-              <div className="flex items-center bg-slate-200/70 p-0.5 rounded-lg">
-                <button
-                  type="button"
-                  onClick={() => setViewMode('table')}
-                  title="Table view"
-                  className={`p-1.5 rounded-md transition-colors ${
-                    viewMode === 'table' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'
-                  }`}
-                >
-                  <List className="w-4 h-4" />
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setViewMode('grid')}
-                  title="Grid view"
-                  className={`p-1.5 rounded-md transition-colors ${
-                    viewMode === 'grid' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-500 hover:text-slate-900'
-                  }`}
-                >
-                  <LayoutGrid className="w-4 h-4" />
-                </button>
-              </div>
-            </div>
-          </div>
-
-          {/* Main Files Presentation Area */}
-          {isLoadingFiles ? (
-            <div className="bg-white border border-slate-200 rounded-xl p-12 text-center shadow-xs">
-              <div className="w-8 h-8 border-2 border-blue-600/30 border-t-blue-600 rounded-full animate-spin mx-auto mb-3" />
-              <p className="text-xs text-slate-500">Loading files from secure storage...</p>
-            </div>
-          ) : filteredFiles.length === 0 ? (
-            /* Clean Empty State */
-            <div className="bg-white border border-slate-200 rounded-2xl p-12 text-center shadow-xs max-w-lg mx-auto">
-              <div className="w-14 h-14 rounded-2xl bg-blue-50 text-blue-600 mx-auto flex items-center justify-center mb-4">
-                <Files className="w-7 h-7" />
-              </div>
-              <h3 className="text-base font-semibold text-slate-900">
-                {searchQuery
-                  ? 'No matching files found'
-                  : selectedProject !== 'all'
-                  ? `No files in "${selectedProject}"`
-                  : 'No files in your vault yet'}
-              </h3>
-              <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-                {searchQuery
-                  ? 'Try clearing your search query or switching project filters.'
-                  : 'Upload design deliverables, brand guides, vector assets, or invoices to share them with your clients.'}
-              </p>
-              <div className="mt-5 flex items-center justify-center gap-2">
-                {searchQuery ? (
+              {/* Feed Filter Controls */}
+              <div className="flex items-center gap-1 p-1 bg-zinc-200/70 dark:bg-zinc-900 border border-transparent dark:border-zinc-800 rounded-xl w-fit">
+                {[
+                  { id: 'all' as const, label: 'All Posts', icon: null },
+                  { id: 'video' as const, label: 'Videos', icon: Video },
+                  { id: 'image' as const, label: 'Images', icon: ImageIcon },
+                  { id: 'none' as const, label: 'Thoughts', icon: MessageSquare },
+                ].map((tab) => (
                   <button
+                    key={tab.id}
                     type="button"
-                    onClick={() => setSearchQuery('')}
-                    className="py-2 px-3.5 text-xs font-medium text-slate-700 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                    onClick={() => setFeedFilter(tab.id)}
+                    className={`px-3.5 py-1.5 text-xs font-semibold rounded-lg transition-colors cursor-pointer whitespace-nowrap ${
+                      feedFilter === tab.id
+                        ? 'bg-white dark:bg-zinc-800 text-zinc-950 dark:text-white shadow-xs'
+                        : 'text-zinc-600 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white'
+                    }`}
                   >
-                    Clear Search
+                    {tab.label}
                   </button>
+                ))}
+              </div>
+
+              {/* Feed Posts */}
+              <div className="pilgrim-stack">
+                {filteredFeedPosts.length === 0 ? (
+                  <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl p-10 text-center">
+                    <p className="text-sm font-semibold text-zinc-900 dark:text-zinc-100">
+                      No posts in this category yet
+                    </p>
+                    <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
+                      Be the first to upload a video, share an image, or post a thought.
+                    </p>
+                  </div>
                 ) : (
-                  <button
-                    type="button"
-                    onClick={() => setIsUploadOpen(true)}
-                    className="py-2 px-4 bg-blue-600 hover:bg-blue-700 text-white text-xs font-semibold rounded-lg flex items-center gap-1.5 shadow-xs cursor-pointer"
-                  >
-                    <Plus className="w-4 h-4" />
-                    <span>Upload First File</span>
-                  </button>
+                  filteredFeedPosts.map((post) => (
+                    <PostCard
+                      key={post.id}
+                      post={post}
+                      currentUser={user}
+                      onLike={handleLike}
+                      onComment={handleComment}
+                      onEditComment={handleEditComment}
+                      onReactComment={handleReactComment}
+                      onHideComment={handleHideComment}
+                      onDeleteComment={handleDeleteComment}
+                      onBlockUser={handleBlockUser}
+                      onShare={(p) => setSharePostTarget(p)}
+                      onChangeVisibility={handleChangeVisibility}
+                      onDeletePost={handleDeletePost}
+                      onReport={(t) => setReportTarget(t)}
+                      onOpenProfile={openProfileById}
+                    />
+                  ))
                 )}
               </div>
             </div>
-          ) : (
-            /* Populated Files List or Grid */
-            <FileList
-              files={filteredFiles}
-              viewMode={viewMode}
-              onPreview={(file) => setPreviewFile(file)}
-              onDownload={handleDownload}
-              onDelete={(file) => setDeleteCandidate(file)}
-              onShare={(file) => {
-                setShareCandidate(file);
-                setIsShareModalOpen(true);
+          )}
+
+          {activeView === 'profile' && viewedProfile && (
+            <div className="max-w-3xl mx-auto">
+              <ProfileDashboard
+                profileUser={viewedProfile.user}
+                currentUser={user}
+                isFriend={viewedProfile.isFriend}
+                pendingDirection={viewedProfile.pendingDirection}
+                friendCount={viewedProfile.friendCount}
+                posts={profilePosts}
+                onProfileUpdated={(updated) => {
+                  setUser(updated);
+                  setViewedProfile((prev) => (prev ? { ...prev, user: updated } : null));
+                  loadPosts();
+                  showToast('Profile updated.');
+                }}
+                onPostCreated={handlePostCreated}
+                onLike={handleLike}
+                onComment={handleComment}
+                onEditComment={handleEditComment}
+                onReactComment={handleReactComment}
+                onHideComment={handleHideComment}
+                onDeleteComment={handleDeleteComment}
+                onBlockUser={handleBlockUser}
+                onShare={(p) => setSharePostTarget(p)}
+                onChangeVisibility={handleChangeVisibility}
+                onDeletePost={handleDeletePost}
+                onAddFriend={handleSendFriendRequest}
+                onStartDm={(friendId) => {
+                  setActiveDmFriendId(friendId);
+                  setActiveView('friends');
+                }}
+                onReport={(t) => setReportTarget(t)}
+                onOpenProfile={openProfileById}
+              />
+            </div>
+          )}
+
+          {activeView === 'server' && activeServer && (
+            <ServerWorkspace
+              server={activeServer}
+              currentUser={user}
+              onlineUserIds={onlineUserIds}
+              incomingWsMessage={incomingWsMessage}
+              incomingWsUpdatedMessage={incomingWsUpdatedMessage}
+              incomingWsDeletedMessageId={incomingWsDeletedMessageId}
+              voiceParticipants={voiceParticipantsByServer[activeServer.id] || []}
+              activeVoice={activeVoice}
+              voiceSettings={preferences.voice}
+              onJoinVoiceChannel={handleJoinVoiceChannel}
+              onLeaveVoice={handleLeaveVoice}
+              onToggleVoiceMute={handleToggleVoiceMute}
+              onToggleVoiceDeafen={handleToggleVoiceDeafen}
+              onPttHoldStart={handlePttHoldStart}
+              onPttHoldEnd={handlePttHoldEnd}
+              onSwitchVoiceInputMode={(mode) => {
+                setPreferences((prev) => ({
+                  ...prev,
+                  voice: { ...prev.voice, inputMode: mode },
+                }));
+                if (activeVoice) {
+                  const next = { ...activeVoice, pttActive: false, speaking: false };
+                  setActiveVoice(next);
+                  syncMicTransmission(next);
+                }
+                showToast(
+                  mode === 'ptt'
+                    ? 'Switched to Push to Talk.'
+                    : 'Switched to Voice Activity.'
+                );
+              }}
+              onOpenVoiceSettings={() => {
+                setSettingsFocusSection('voice');
+                setActiveView('settings');
+              }}
+              onServerUpdated={(updatedSrv) => {
+                setServers((prev) =>
+                  prev.map((s) => (s.id === updatedSrv.id ? { ...s, ...updatedSrv } : s))
+                );
+              }}
+              onOpenProfile={openProfileById}
+              onForwardMessage={(msg) => setForwardMessageTarget(msg)}
+              onCreateReminder={handleCreateReminder}
+              onSpeakMessage={handleSpeakMessage}
+              onNotify={showToast}
+              onReport={(t) => setReportTarget(t)}
+              onAddFriend={handleSendFriendRequest}
+            />
+          )}
+
+          {activeView === 'friends' && (
+            <FriendsView
+              currentUser={user}
+              friendsData={friendsData}
+              onlineUserIds={onlineUserIds}
+              activeDmFriendId={activeDmFriendId}
+              setActiveDmFriendId={setActiveDmFriendId}
+              incomingWsMessage={incomingWsMessage}
+              incomingWsUpdatedMessage={incomingWsUpdatedMessage}
+              incomingWsDeletedMessageId={incomingWsDeletedMessageId}
+              onRefreshFriends={loadFriends}
+              onSendFriendRequest={handleSendFriendRequest}
+              onRespondRequest={handleRespondRequest}
+              onRemoveFriend={handleRemoveFriend}
+              onOpenProfile={openProfileById}
+              onForwardMessage={(msg) => setForwardMessageTarget(msg)}
+              onCreateReminder={handleCreateReminder}
+              onSpeakMessage={handleSpeakMessage}
+              onNotify={showToast}
+              onReport={(t) => setReportTarget(t)}
+            />
+          )}
+
+          {activeView === 'safety' && (
+            <SafetyView
+              currentUser={user}
+              onUserUpdated={(updated) => {
+                setUser(updated);
+                loadPosts();
+                showToast('Blocked list updated.');
               }}
             />
           )}
 
-          {/* Quick Portal Security & Client Access Footer Strip */}
-          <div className="pt-4 flex flex-col sm:flex-row items-center justify-between gap-3 text-xs text-slate-500 border-t border-slate-200/80">
-            <div className="flex items-center gap-2">
-              <ShieldCheck className="w-4 h-4 text-emerald-600" />
-              <span>
-                Protected under FeliVault strict tenant isolation rules. Each user accesses only their assigned files.
-              </span>
-            </div>
-            <div className="flex items-center gap-4">
-              <button
-                type="button"
-                onClick={() => {
-                  setShareCandidate(null);
-                  setIsShareModalOpen(true);
-                }}
-                className="text-blue-600 hover:text-blue-700 font-medium underline-offset-2 hover:underline cursor-pointer"
-              >
-                Get Client Invite Link
-              </button>
-              <span aria-hidden="true" className="text-slate-300">·</span>
-              <span className="font-mono tabular-nums">
-                {filteredFiles.length} {filteredFiles.length === 1 ? 'file' : 'files'} ({formatBytes(totalVaultBytes)})
-              </span>
-            </div>
-          </div>
+          {activeView === 'settings' && (
+            <SettingsView
+              preferences={preferences}
+              onUpdatePreferences={setPreferences}
+              onResetDefaults={() => {
+                setPreferences(DEFAULT_PREFERENCES);
+                showToast('Settings reset to defaults.');
+              }}
+              onSignOut={handleSignOut}
+              focusSection={settingsFocusSection}
+            />
+          )}
         </main>
       </div>
 
-      {/* Upload Modal */}
-      <UploadModal
-        isOpen={isUploadOpen}
-        onClose={() => setIsUploadOpen(false)}
-        onUploadSuccess={handleUploadSuccess}
-        existingProjects={availableProjects}
-        initialProject={selectedProject !== 'all' ? selectedProject : undefined}
+      {/* Modals */}
+      <PostComposerModal
+        isOpen={isComposerOpen}
+        onClose={() => setIsComposerOpen(false)}
+        onPostCreated={handlePostCreated}
       />
 
-      {/* File Preview Modal */}
-      <FilePreviewModal
-        file={previewFile}
-        onClose={() => setPreviewFile(null)}
-        onDownload={handleDownload}
-        onDelete={(file) => {
-          setDeleteCandidate(file);
-        }}
-        onShare={(file) => {
-          setShareCandidate(file);
-          setIsShareModalOpen(true);
+      <NewServerModal
+        isOpen={isNewServerOpen}
+        onClose={() => setIsNewServerOpen(false)}
+        onServerCreated={(newSrv) => {
+          setServers((prev) => [newSrv, ...prev]);
+          setSelectedServerId(newSrv.id);
+          setActiveView('server');
+          showToast(`Server "${newSrv.name}" created!`);
         }}
       />
 
-      {/* Delete Confirmation Modal */}
-      <DeleteConfirmModal
-        file={deleteCandidate}
-        isOpen={!!deleteCandidate}
-        onClose={() => setDeleteCandidate(null)}
-        onConfirm={handleDeleteFile}
-        isDeleting={isDeleting}
+      <ReportModal
+        target={reportTarget}
+        onClose={() => setReportTarget(null)}
+        onReported={(blocked) => {
+          showToast(
+            blocked
+              ? 'Report submitted and user blocked.'
+              : 'Report submitted to Pilgrim Safety Team.'
+          );
+          if (blocked) {
+            api.getMe().then((res) => setUser(res.user));
+            loadPosts();
+          }
+        }}
       />
 
-      {/* Share / Client Access Modal */}
-      <ShareModal
-        file={shareCandidate}
-        isOpen={isShareModalOpen}
-        onClose={() => {
-          setIsShareModalOpen(false);
-          setShareCandidate(null);
+      <SharePostModal
+        post={sharePostTarget}
+        servers={servers}
+        onClose={() => setSharePostTarget(null)}
+        onShared={(postId, newCount) => {
+          const updateCount = (list: Post[]) =>
+            list.map((p) => (p.id === postId ? { ...p, sharesCount: newCount } : p));
+          setPosts(updateCount);
+          setProfilePosts(updateCount);
+          showToast('Post shared!');
         }}
-        userRole={user.role}
+      />
+
+      <ForwardMessageModal
+        message={forwardMessageTarget}
+        servers={servers}
+        friends={friendsData.friends}
+        onClose={() => setForwardMessageTarget(null)}
+        onForwarded={(dest) => showToast(`Message forwarded to ${dest}.`)}
       />
     </div>
   );
