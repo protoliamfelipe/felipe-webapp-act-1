@@ -5,8 +5,7 @@ interface PilgrimLogoProps {
   invertOnDark?: boolean;
 }
 
-const WIKIA_PILGRIM_URL =
-  'https://static.wikia.nocookie.net/nikke-goddess-of-victory-international/images/1/12/Pilgrim_logo.png/revision/latest?cb=20230527091902';
+const PILGRIM_LOGO_URL = '/assets/pilgrim-logo.webp';
 
 export const PilgrimLogo: React.FC<PilgrimLogoProps> = ({ className = 'w-8 h-8', invertOnDark = false }) => {
   const [failed, setFailed] = useState(false);
@@ -14,11 +13,10 @@ export const PilgrimLogo: React.FC<PilgrimLogoProps> = ({ className = 'w-8 h-8',
   if (!failed) {
     return (
       <img
-        src={WIKIA_PILGRIM_URL}
+        src={PILGRIM_LOGO_URL}
         alt="Pilgrim Emblem"
-        referrerPolicy="no-referrer"
         onError={() => setFailed(true)}
-        className={`${className} object-contain shrink-0 ${invertOnDark ? 'brightness-0 invert' : ''}`}
+        className={`${className} object-contain shrink-0 ${invertOnDark ? 'mix-blend-screen' : 'brightness-0 invert mix-blend-multiply'}`}
       />
     );
   }

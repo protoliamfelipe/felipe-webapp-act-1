@@ -1,0 +1,569 @@
+{
+  "users": [
+    {
+      "id": "usr_frostbyte",
+      "email": "frostbyte@pilgrim.app",
+      "passwordHash": "$2b$10$C8L.O.d5lzof7IaaZ3XO7udIbqYIhF64CJyoRxxkpgjXlPVzTleBm",
+      "name": "FrostByte",
+      "tag": "FrostByte#0001",
+      "bio": "Co-op gamer, clip editor, and UI tinkerer. Sharing match highlights, capture setups, and hosting weekend rooms.",
+      "avatarUrl": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M24%2096c0-20%2016-32%2036-32s36%2012%2036%2032%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2244%22%20r%3D%2221%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M40%2042h40v8H40z%22%20fill%3D%22%2318181b%22%2F%3E%3Cpath%20d%3D%22M44%2045h12v2H44zm20%200h12v2H64z%22%20fill%3D%22%23e4e4e7%22%2F%3E%3C%2Fsvg%3E",
+      "birthDate": "2001-05-14",
+      "status": "online",
+      "blockedUserIds": [],
+      "createdAt": "2026-10-14T13:16:17.263Z"
+    },
+    {
+      "id": "usr_kitsune",
+      "email": "kitsune@pilgrim.app",
+      "passwordHash": "$2b$10$C8L.O.d5lzof7IaaZ3XO7udIbqYIhF64CJyoRxxkpgjXlPVzTleBm",
+      "name": "KitsuneDrift",
+      "tag": "KitsuneDrift#0419",
+      "bio": "Indie dev and multiplayer strategist. Always down for evening ranked queues, playtests, and chill voice rooms.",
+      "avatarUrl": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2242%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M34%2086L86%2034M42%2034h44v44%22%20fill%3D%22none%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E",
+      "birthDate": "2000-09-21",
+      "status": "online",
+      "blockedUserIds": [],
+      "createdAt": "2026-10-19T13:16:17.263Z"
+    },
+    {
+      "id": "usr_pixel",
+      "email": "pixel@pilgrim.app",
+      "passwordHash": "$2b$10$C8L.O.d5lzof7IaaZ3XO7udIbqYIhF64CJyoRxxkpgjXlPVzTleBm",
+      "name": "PixelVanguard",
+      "tag": "PixelVanguard#0777",
+      "bio": "Motion designer and tournament host. Archiving tutorials, clip reels, and weekend bracket recaps.",
+      "avatarUrl": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2327272a%22%2F%3E%3Cellipse%20cx%3D%2260%22%20cy%3D%2234%22%20rx%3D%2226%22%20ry%3D%227%22%20fill%3D%22none%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%224%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2264%22%20r%3D%2218%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M30%20104c4-15%2016-24%2030-24s26%209%2030%2024%22%20fill%3D%22%23d4d4d8%22%2F%3E%3C%2Fsvg%3E",
+      "birthDate": "1999-11-02",
+      "status": "idle",
+      "blockedUserIds": [],
+      "createdAt": "2026-10-24T13:16:17.263Z"
+    },
+    {
+      "id": "usr_nightfall",
+      "email": "nightfall@pilgrim.app",
+      "passwordHash": "$2b$10$C8L.O.d5lzof7IaaZ3XO7udIbqYIhF64CJyoRxxkpgjXlPVzTleBm",
+      "name": "NightfallGG",
+      "tag": "NightfallGG#2026",
+      "bio": "Audio producer and tactical RPG player. Connecting creators and teams across communities.",
+      "avatarUrl": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpolygon%20points%3D%2260%2C20%2096%2C42%2096%2C78%2060%2C100%2024%2C78%2024%2C42%22%20fill%3D%22none%22%20stroke%3D%22%23a1a1aa%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2252%22%20r%3D%2215%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M36%2086c5-11%2014-16%2024-16s19%205%2024%2016%22%20fill%3D%22%23d4d4d8%22%2F%3E%3C%2Fsvg%3E",
+      "birthDate": "2002-03-10",
+      "status": "dnd",
+      "blockedUserIds": [],
+      "createdAt": "2026-11-03T13:16:17.263Z"
+    }
+  ],
+  "servers": [
+    {
+      "id": "srv_lounge",
+      "name": "Pilgrim Lounge",
+      "description": "Open community hangout for introductions, daily conversations, and shared media.",
+      "category": "Community & Hangout",
+      "iconStyle": "shield",
+      "ownerId": "usr_frostbyte",
+      "memberIds": [
+        "usr_frostbyte",
+        "usr_kitsune",
+        "usr_pixel",
+        "usr_nightfall"
+      ],
+      "channels": [
+        {
+          "id": "ch_lounge_welcome",
+          "name": "welcome",
+          "type": "text",
+          "topic": "Introduce yourself and meet other members"
+        },
+        {
+          "id": "ch_lounge_general",
+          "name": "general",
+          "type": "text",
+          "topic": "Everyday conversation and community updates"
+        },
+        {
+          "id": "ch_lounge_media",
+          "name": "media-showcase",
+          "type": "text",
+          "topic": "Share videos, screenshots, and creative work"
+        },
+        {
+          "id": "ch_lounge_voice",
+          "name": "Lounge Voice",
+          "type": "voice",
+          "topic": "Hangout & voice chat"
+        }
+      ],
+      "roles": [
+        {
+          "id": "srv_lounge_role_admin",
+          "name": "Admin",
+          "color": "#fafafa",
+          "permissions": {
+            "administrator": true,
+            "manageServer": true,
+            "manageRoles": true,
+            "manageChannels": true,
+            "kickMembers": true,
+            "sendMessages": true,
+            "manageMessages": true,
+            "pinMessages": true,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        },
+        {
+          "id": "srv_lounge_role_mod",
+          "name": "Moderator",
+          "color": "#a1a1aa",
+          "permissions": {
+            "administrator": false,
+            "manageServer": false,
+            "manageRoles": false,
+            "manageChannels": true,
+            "kickMembers": true,
+            "sendMessages": true,
+            "manageMessages": true,
+            "pinMessages": true,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        },
+        {
+          "id": "srv_lounge_role_member",
+          "name": "Member",
+          "color": "#71717a",
+          "permissions": {
+            "administrator": false,
+            "manageServer": false,
+            "manageRoles": false,
+            "manageChannels": false,
+            "kickMembers": false,
+            "sendMessages": true,
+            "manageMessages": false,
+            "pinMessages": false,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        }
+      ],
+      "memberRoles": {
+        "usr_frostbyte": [
+          "srv_lounge_role_admin"
+        ],
+        "usr_kitsune": [
+          "srv_lounge_role_mod"
+        ]
+      },
+      "createdAt": "2026-10-24T13:16:17.263Z"
+    },
+    {
+      "id": "srv_gaming",
+      "name": "Co-Op & Gaming Hub",
+      "description": "Matchmaking, LFG party finder, strategy discussions, and highlight clips.",
+      "category": "Gaming & Co-Op",
+      "iconStyle": "crosshair",
+      "ownerId": "usr_kitsune",
+      "memberIds": [
+        "usr_kitsune",
+        "usr_frostbyte",
+        "usr_nightfall"
+      ],
+      "channels": [
+        {
+          "id": "ch_gaming_lobby",
+          "name": "lobby-chat",
+          "type": "text",
+          "topic": "General gaming news and session planning"
+        },
+        {
+          "id": "ch_gaming_lfg",
+          "name": "lfg-party",
+          "type": "text",
+          "topic": "Find teammates for co-op and ranked matches"
+        },
+        {
+          "id": "ch_gaming_clips",
+          "name": "clips-and-guides",
+          "type": "text",
+          "topic": "Post match highlights and setup notes"
+        },
+        {
+          "id": "ch_gaming_voice",
+          "name": "Squad Comms",
+          "type": "voice",
+          "topic": "Drop in for live co-op voice chat"
+        }
+      ],
+      "roles": [
+        {
+          "id": "srv_gaming_role_admin",
+          "name": "Admin",
+          "color": "#fafafa",
+          "permissions": {
+            "administrator": true,
+            "manageServer": true,
+            "manageRoles": true,
+            "manageChannels": true,
+            "kickMembers": true,
+            "sendMessages": true,
+            "manageMessages": true,
+            "pinMessages": true,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        },
+        {
+          "id": "srv_gaming_role_mod",
+          "name": "Moderator",
+          "color": "#a1a1aa",
+          "permissions": {
+            "administrator": false,
+            "manageServer": false,
+            "manageRoles": false,
+            "manageChannels": true,
+            "kickMembers": true,
+            "sendMessages": true,
+            "manageMessages": true,
+            "pinMessages": true,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        },
+        {
+          "id": "srv_gaming_role_member",
+          "name": "Member",
+          "color": "#71717a",
+          "permissions": {
+            "administrator": false,
+            "manageServer": false,
+            "manageRoles": false,
+            "manageChannels": false,
+            "kickMembers": false,
+            "sendMessages": true,
+            "manageMessages": false,
+            "pinMessages": false,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        }
+      ],
+      "memberRoles": {
+        "usr_kitsune": [
+          "srv_gaming_role_admin"
+        ]
+      },
+      "createdAt": "2026-11-01T13:16:17.263Z"
+    },
+    {
+      "id": "srv_creators",
+      "name": "Creator Studio",
+      "description": "Discoverable server for video editors, designers, and streamers exchanging feedback.",
+      "category": "Creators & Video",
+      "iconStyle": "compass",
+      "ownerId": "usr_pixel",
+      "memberIds": [
+        "usr_pixel",
+        "usr_frostbyte"
+      ],
+      "channels": [
+        {
+          "id": "ch_creators_feedback",
+          "name": "feedback",
+          "type": "text",
+          "topic": "Post work-in-progress clips and thumbnails for critique"
+        },
+        {
+          "id": "ch_creators_tools",
+          "name": "editing-workflow",
+          "type": "text",
+          "topic": "Cameras, OBS presets, and export pipelines"
+        },
+        {
+          "id": "ch_creators_voice",
+          "name": "Review Stage",
+          "type": "voice",
+          "topic": "Live review & audio feedback room"
+        }
+      ],
+      "roles": [
+        {
+          "id": "srv_creators_role_admin",
+          "name": "Admin",
+          "color": "#fafafa",
+          "permissions": {
+            "administrator": true,
+            "manageServer": true,
+            "manageRoles": true,
+            "manageChannels": true,
+            "kickMembers": true,
+            "sendMessages": true,
+            "manageMessages": true,
+            "pinMessages": true,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        },
+        {
+          "id": "srv_creators_role_mod",
+          "name": "Moderator",
+          "color": "#a1a1aa",
+          "permissions": {
+            "administrator": false,
+            "manageServer": false,
+            "manageRoles": false,
+            "manageChannels": true,
+            "kickMembers": true,
+            "sendMessages": true,
+            "manageMessages": true,
+            "pinMessages": true,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        },
+        {
+          "id": "srv_creators_role_member",
+          "name": "Member",
+          "color": "#71717a",
+          "permissions": {
+            "administrator": false,
+            "manageServer": false,
+            "manageRoles": false,
+            "manageChannels": false,
+            "kickMembers": false,
+            "sendMessages": true,
+            "manageMessages": false,
+            "pinMessages": false,
+            "attachFiles": true,
+            "addReactions": true,
+            "connectVoice": true,
+            "speakVoice": true
+          }
+        }
+      ],
+      "memberRoles": {
+        "usr_pixel": [
+          "srv_creators_role_admin"
+        ]
+      },
+      "createdAt": "2026-11-05T13:16:17.263Z"
+    }
+  ],
+  "messages": [
+    {
+      "id": "msg_1",
+      "serverId": "srv_lounge",
+      "channelId": "ch_lounge_welcome",
+      "authorId": "usr_frostbyte",
+      "authorName": "FrostByte",
+      "authorTag": "FrostByte#0001",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M24%2096c0-20%2016-32%2036-32s36%2012%2036%2032%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2244%22%20r%3D%2221%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M40%2042h40v8H40z%22%20fill%3D%22%2318181b%22%2F%3E%3Cpath%20d%3D%22M44%2045h12v2H44zm20%200h12v2H64z%22%20fill%3D%22%23e4e4e7%22%2F%3E%3C%2Fsvg%3E",
+      "content": "Welcome to Pilgrim Lounge! Drop an intro here or share your latest video post in #media-showcase.",
+      "createdAt": "2026-11-13T12:26:17.263Z"
+    },
+    {
+      "id": "msg_2",
+      "serverId": "srv_lounge",
+      "channelId": "ch_lounge_welcome",
+      "authorId": "usr_kitsune",
+      "authorName": "KitsuneDrift",
+      "authorTag": "KitsuneDrift#0419",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2242%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M34%2086L86%2034M42%2034h44v44%22%20fill%3D%22none%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E",
+      "content": "Glad to be here! I am running co-op lobbies tonight if anyone wants to join in #lfg-party.",
+      "createdAt": "2026-11-13T12:41:17.263Z"
+    },
+    {
+      "id": "msg_3",
+      "serverId": "srv_lounge",
+      "channelId": "ch_lounge_general",
+      "authorId": "usr_pixel",
+      "authorName": "PixelVanguard",
+      "authorTag": "PixelVanguard#0777",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2327272a%22%2F%3E%3Cellipse%20cx%3D%2260%22%20cy%3D%2234%22%20rx%3D%2226%22%20ry%3D%227%22%20fill%3D%22none%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%224%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2264%22%20r%3D%2218%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M30%20104c4-15%2016-24%2030-24s26%209%2030%2024%22%20fill%3D%22%23d4d4d8%22%2F%3E%3C%2Fsvg%3E",
+      "content": "Just tested the new letter sizing and dark mode settings — super comfortable for late-night editing.",
+      "createdAt": "2026-11-13T12:56:17.263Z"
+    },
+    {
+      "id": "msg_4",
+      "serverId": "srv_gaming",
+      "channelId": "ch_gaming_lobby",
+      "authorId": "usr_nightfall",
+      "authorName": "NightfallGG",
+      "authorTag": "NightfallGG#2026",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpolygon%20points%3D%2260%2C20%2096%2C42%2096%2C78%2060%2C100%2024%2C78%2024%2C42%22%20fill%3D%22none%22%20stroke%3D%22%23a1a1aa%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2252%22%20r%3D%2215%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M36%2086c5-11%2014-16%2024-16s19%205%2024%2016%22%20fill%3D%22%23d4d4d8%22%2F%3E%3C%2Fsvg%3E",
+      "content": "Looking for two players for weekend tournament warmups around 8 PM!",
+      "createdAt": "2026-11-13T12:36:17.263Z"
+    }
+  ],
+  "posts": [
+    {
+      "id": "post_1",
+      "authorId": "usr_frostbyte",
+      "authorName": "FrostByte",
+      "authorTag": "FrostByte#0001",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M24%2096c0-20%2016-32%2036-32s36%2012%2036%2032%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2244%22%20r%3D%2221%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M40%2042h40v8H40z%22%20fill%3D%22%2318181b%22%2F%3E%3Cpath%20d%3D%22M44%2045h12v2H44zm20%200h12v2H64z%22%20fill%3D%22%23e4e4e7%22%2F%3E%3C%2Fsvg%3E",
+      "title": "60fps Capture Settings & Color Grading Notes for Gameplay Clips",
+      "content": "Switched to 1440p60 CBR at 18 Mbps and clean lossless audio tracks before exporting highlights. Keeps fast camera pans crisp without bloating upload sizes. Let me know what bitrate settings you use!",
+      "mediaType": "none",
+      "visibility": "public",
+      "likes": [
+        "usr_kitsune",
+        "usr_pixel",
+        "usr_nightfall"
+      ],
+      "sharesCount": 6,
+      "comments": [
+        {
+          "id": "cmt_1",
+          "postId": "post_1",
+          "authorId": "usr_kitsune",
+          "authorName": "KitsuneDrift",
+          "authorTag": "KitsuneDrift#0419",
+          "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2242%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M34%2086L86%2034M42%2034h44v44%22%20fill%3D%22none%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E",
+          "content": "Tried 18 Mbps last week and the motion clarity is night and day.",
+          "reactions": {
+            "🔥": [
+              "usr_frostbyte",
+              "usr_pixel"
+            ],
+            "👍": [
+              "usr_nightfall"
+            ]
+          },
+          "hiddenByUserIds": [],
+          "createdAt": "2026-11-13T11:46:17.263Z"
+        },
+        {
+          "id": "cmt_1_reply",
+          "postId": "post_1",
+          "parentCommentId": "cmt_1",
+          "authorId": "usr_frostbyte",
+          "authorName": "FrostByte",
+          "authorTag": "FrostByte#0001",
+          "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M24%2096c0-20%2016-32%2036-32s36%2012%2036%2032%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2244%22%20r%3D%2221%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M40%2042h40v8H40z%22%20fill%3D%22%2318181b%22%2F%3E%3Cpath%20d%3D%22M44%2045h12v2H44zm20%200h12v2H64z%22%20fill%3D%22%23e4e4e7%22%2F%3E%3C%2Fsvg%3E",
+          "content": "Right? Pair it with P6 preset and zero dropped frames.",
+          "reactions": {
+            "👍": [
+              "usr_kitsune"
+            ]
+          },
+          "hiddenByUserIds": [],
+          "createdAt": "2026-11-13T12:06:17.263Z"
+        },
+        {
+          "id": "cmt_2",
+          "postId": "post_1",
+          "authorId": "usr_nightfall",
+          "authorName": "NightfallGG",
+          "authorTag": "NightfallGG#2026",
+          "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpolygon%20points%3D%2260%2C20%2096%2C42%2096%2C78%2060%2C100%2024%2C78%2024%2C42%22%20fill%3D%22none%22%20stroke%3D%22%23a1a1aa%22%20stroke-width%3D%223%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2252%22%20r%3D%2215%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M36%2086c5-11%2014-16%2024-16s19%205%2024%2016%22%20fill%3D%22%23d4d4d8%22%2F%3E%3C%2Fsvg%3E",
+          "content": "Sharing this with the Creator Studio workflow channel!",
+          "reactions": {
+            "❤️": [
+              "usr_frostbyte"
+            ]
+          },
+          "hiddenByUserIds": [],
+          "createdAt": "2026-11-13T12:31:17.263Z"
+        }
+      ],
+      "createdAt": "2026-11-13T10:16:17.263Z"
+    },
+    {
+      "id": "post_2",
+      "authorId": "usr_kitsune",
+      "authorName": "KitsuneDrift",
+      "authorTag": "KitsuneDrift#0419",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2260%22%20r%3D%2242%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M34%2086L86%2034M42%2034h44v44%22%20fill%3D%22none%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%225%22%20stroke-linecap%3D%22round%22%20stroke-linejoin%3D%22round%22%2F%3E%3C%2Fsvg%3E",
+      "title": "Weekend Co-Op Lobby Schedule & Voice Etiquette",
+      "content": "Hosting open co-op lobbies Friday and Saturday evenings. Beginners welcome — drop your tag in Friends & DMs if you want an invite before we queue up.",
+      "mediaType": "none",
+      "visibility": "public",
+      "likes": [
+        "usr_frostbyte",
+        "usr_nightfall"
+      ],
+      "sharesCount": 3,
+      "comments": [],
+      "createdAt": "2026-11-13T08:16:17.263Z"
+    },
+    {
+      "id": "post_3",
+      "authorId": "usr_pixel",
+      "authorName": "PixelVanguard",
+      "authorTag": "PixelVanguard#0777",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2327272a%22%2F%3E%3Cellipse%20cx%3D%2260%22%20cy%3D%2234%22%20rx%3D%2226%22%20ry%3D%227%22%20fill%3D%22none%22%20stroke%3D%22%23ffffff%22%20stroke-width%3D%224%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2264%22%20r%3D%2218%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M30%20104c4-15%2016-24%2030-24s26%209%2030%2024%22%20fill%3D%22%23d4d4d8%22%2F%3E%3C%2Fsvg%3E",
+      "title": "Motion Reel Rough Cut Feedback (Friends Only)",
+      "content": "Sharing early timing notes for our next community intro sequence with friends only before publishing publicly.",
+      "mediaType": "none",
+      "visibility": "friends",
+      "likes": [
+        "usr_frostbyte"
+      ],
+      "sharesCount": 1,
+      "comments": [],
+      "createdAt": "2026-11-13T04:16:17.263Z"
+    },
+    {
+      "id": "post_4",
+      "authorId": "usr_frostbyte",
+      "authorName": "FrostByte",
+      "authorTag": "FrostByte#0001",
+      "authorAvatar": "data:image/svg+xml;utf8,%3Csvg%20xmlns%3D%22http%3A%2F%2Fwww.w3.org%2F2000%2Fsvg%22%20viewBox%3D%220%200%20120%20120%22%3E%3Crect%20width%3D%22120%22%20height%3D%22120%22%20fill%3D%22%2309090b%22%2F%3E%3Cpath%20d%3D%22M24%2096c0-20%2016-32%2036-32s36%2012%2036%2032%22%20fill%3D%22%23f4f4f5%22%2F%3E%3Ccircle%20cx%3D%2260%22%20cy%3D%2244%22%20r%3D%2221%22%20fill%3D%22%23ffffff%22%2F%3E%3Cpath%20d%3D%22M40%2042h40v8H40z%22%20fill%3D%22%2318181b%22%2F%3E%3Cpath%20d%3D%22M44%2045h12v2H44zm20%200h12v2H64z%22%20fill%3D%22%23e4e4e7%22%2F%3E%3C%2Fsvg%3E",
+      "title": "Personal Editing Checklist (Private)",
+      "content": "Normalize dialogue to -14 LUFS, trim dead air on intro, and export clean thumbnail frame before posting.",
+      "mediaType": "none",
+      "visibility": "private",
+      "likes": [],
+      "sharesCount": 0,
+      "comments": [],
+      "createdAt": "2026-11-12T23:16:17.263Z"
+    }
+  ],
+  "friendRequests": [
+    {
+      "id": "fr_1",
+      "fromUserId": "usr_frostbyte",
+      "toUserId": "usr_kitsune",
+      "status": "accepted",
+      "createdAt": "2026-10-29T13:16:17.263Z"
+    },
+    {
+      "id": "fr_2",
+      "fromUserId": "usr_frostbyte",
+      "toUserId": "usr_pixel",
+      "status": "accepted",
+      "createdAt": "2026-11-01T13:16:17.263Z"
+    },
+    {
+      "id": "fr_3",
+      "fromUserId": "usr_nightfall",
+      "toUserId": "usr_frostbyte",
+      "status": "accepted",
+      "createdAt": "2026-11-08T13:16:17.263Z"
+    },
+    {
+      "id": "fr_4",
+      "fromUserId": "usr_kitsune",
+      "toUserId": "usr_nightfall",
+      "status": "pending",
+      "createdAt": "2026-11-13T07:16:17.263Z"
+    }
+  ],
+  "reports": []
+}

@@ -2556,7 +2556,7 @@ async function startServer() {
   }
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Pilgrim server running on http://0.0.0.0:${PORT}`);
+    console.log(`Pilgrim server running at http://localhost:${PORT}`);
   });
 }
 
