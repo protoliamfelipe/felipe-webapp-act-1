@@ -86,14 +86,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
   // Email Code (Passwordless) State
   const [emailCodeSent, setEmailCodeSent] = useState(false);
   const [emailCodeInput, setEmailCodeInput] = useState('');
-  const [previewDelivery, setPreviewDelivery] = useState<{
-    code?: string;
-    magicToken?: string;
-    deliveryMode: 'email' | 'preview';
-  } | null>(null);
   const [unregisteredPrompt, setUnregisteredPrompt] = useState(false);
 
   const [showPassword, setShowPassword] = useState(false);
+  const [acceptedTos, setAcceptedTos] = useState(false);
+  const [tosModalOpen, setTosModalOpen] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [accessDeniedAge, setAccessDeniedAge] = useState(false);
@@ -193,14 +190,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
     }
     setLoading(true);
     try {
-      const res = await api.requestEmailLoginCode(email.trim());
+      await api.requestEmailLoginCode(email.trim());
       setEmailCodeSent(true);
       setEmailCodeInput('');
-      setPreviewDelivery({
-        code: res.previewCode,
-        magicToken: res.magicToken,
-        deliveryMode: res.deliveryMode,
-      });
     } catch (err: any) {
       const msg = err?.message || 'Could not send login code.';
       setErrorMessage(msg);
@@ -260,6 +252,11 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
 
       if (password.length < 8) {
         setErrorMessage('Password must be at least 8 characters.');
+        return;
+      }
+
+      if (!acceptedTos) {
+        setErrorMessage('You must read and accept the Pilgrim Terms of Service to create an account.');
         return;
       }
     }
@@ -452,6 +449,19 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
                   Create an Account with {email}
                 </button>
               )}
+              {mode === 'signin' && signInMethod === 'email_code' && !unregisteredPrompt && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setSignInMethod('password');
+                    setErrorMessage(null);
+                    setEmailCodeSent(false);
+                  }}
+                  className="ml-6 py-1 px-2.5 rounded-lg bg-zinc-950 text-white dark:bg-white dark:text-zinc-950 text-[11px] font-semibold cursor-pointer"
+                >
+                  Switch to Password Sign In
+                </button>
+              )}
             </div>
           )}
 
@@ -609,14 +619,15 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
                     <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-800/60 border border-zinc-200 dark:border-zinc-700 flex items-center justify-between gap-2">
                       <div className="flex items-center gap-2 text-xs text-zinc-700 dark:text-zinc-200 min-w-0">
                         <CheckCircle2 className="w-4 h-4 text-emerald-500 shrink-0" />
-                        <span className="truncate">Code sent to {email}</span>
+                        <span className="truncate">
+                          Verification code sent to {email}. Check your inbox.
+                        </span>
                       </div>
                       <button
                         type="button"
                         onClick={() => {
                           setEmailCodeSent(false);
                           setEmailCodeInput('');
-                          setPreviewDelivery(null);
                         }}
                         className="text-[11px] font-semibold text-zinc-600 dark:text-zinc-300 hover:underline shrink-0 cursor-pointer"
                       >
@@ -624,41 +635,9 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
                       </button>
                     </div>
 
-                    {previewDelivery?.deliveryMode === 'preview' && previewDelivery.code && (
-                      <div className="p-3.5 rounded-xl bg-zinc-950 text-white border border-zinc-800 space-y-2">
-                        <div className="flex items-center justify-between gap-2">
-                          <span className="text-[11px] font-semibold text-zinc-400">
-                            Verification Email Inbox (Preview)
-                          </span>
-                          <span className="text-[10px] font-mono text-zinc-400">
-                            Expires in 10m
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between gap-3">
-                          <span className="font-mono text-lg font-bold tracking-widest">
-                            {previewDelivery.code}
-                          </span>
-                          <div className="flex items-center gap-1.5">
-                            <button
-                              type="button"
-                              onClick={() => setEmailCodeInput(previewDelivery.code || '')}
-                              className="py-1 px-2.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[11px] font-semibold cursor-pointer"
-                            >
-                              Fill Code
-                            </button>
-                            {previewDelivery.magicToken && (
-                              <button
-                                type="button"
-                                onClick={() => handleVerifyEmailCode(previewDelivery.magicToken)}
-                                className="py-1 px-2.5 rounded-lg bg-white text-zinc-950 hover:bg-zinc-200 text-[11px] font-semibold cursor-pointer"
-                              >
-                                One-Click Sign In
-                              </button>
-                            )}
-                          </div>
-                        </div>
-                      </div>
-                    )}
+                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                      For security, the 6-digit code is only sent to your email address (check spam if you don&apos;t see it) and expires in 10 minutes.
+                    </p>
 
                     <div>
                       <div className="flex items-center justify-between mb-1.5">
@@ -739,9 +718,38 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
               </div>
             )}
 
+            {mode === 'signup' && (
+              <div className="p-3 rounded-xl bg-zinc-50 dark:bg-zinc-800/50 border border-zinc-200 dark:border-zinc-800 flex items-start gap-2.5">
+                <input
+                  id="tos-accept"
+                  type="checkbox"
+                  checked={acceptedTos}
+                  onChange={(e) => {
+                    setAcceptedTos(e.target.checked);
+                    if (errorMessage?.includes('Terms of Service')) setErrorMessage(null);
+                  }}
+                  className="mt-0.5 w-4 h-4 accent-zinc-950 dark:accent-white cursor-pointer shrink-0"
+                />
+                <label
+                  htmlFor="tos-accept"
+                  className="text-xs text-zinc-700 dark:text-zinc-300 leading-relaxed cursor-pointer"
+                >
+                  I confirm I am at least 13 years old and agree to the{' '}
+                  <button
+                    type="button"
+                    onClick={() => setTosModalOpen(true)}
+                    className="font-bold text-zinc-950 dark:text-white underline hover:opacity-80 cursor-pointer"
+                  >
+                    Pilgrim Terms of Service & Community Guidelines
+                  </button>
+                  .
+                </label>
+              </div>
+            )}
+
             <button
               type="submit"
-              disabled={loading || (mode === 'signup' && accessDeniedAge)}
+              disabled={loading || (mode === 'signup' && (accessDeniedAge || !acceptedTos))}
               className="w-full mt-2 py-2.5 px-4 rounded-xl text-sm font-semibold text-white bg-zinc-950 hover:bg-zinc-800 dark:bg-white dark:text-zinc-950 dark:hover:bg-zinc-200 disabled:opacity-60 transition-colors flex items-center justify-center gap-2 cursor-pointer"
             >
               {loading ? (
@@ -798,6 +806,69 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
         onCancel={() => setIsCropModalOpen(false)}
         onApply={handleCropApply}
       />
+
+      {/* Terms of Service Modal */}
+      {tosModalOpen && (
+        <div
+          onClick={() => setTosModalOpen(false)}
+          className="fixed inset-0 z-50 bg-black/65 backdrop-blur-xs flex items-center justify-center p-4"
+        >
+          <div
+            onClick={(e) => e.stopPropagation()}
+            className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl max-w-lg w-full shadow-2xl overflow-hidden flex flex-col max-h-[85vh]"
+          >
+            <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+              <h3 className="font-display text-base font-bold text-zinc-950 dark:text-white">
+                Pilgrim Terms of Service & Community Guidelines
+              </h3>
+              <button
+                type="button"
+                onClick={() => setTosModalOpen(false)}
+                className="p-1.5 rounded-lg text-zinc-400 hover:text-zinc-900 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            <div className="p-5 overflow-y-auto space-y-3.5 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
+              <p>
+                <strong>1. Eligibility & Privacy:</strong> You must be at least 13 years old to register or use Pilgrim. Use a non-identifying gamer username rather than personal details when interacting publicly.
+              </p>
+              <p>
+                <strong>2. Respectful Conduct:</strong> Harassment, hate speech, threats, doxxing, impersonation, or sharing non-consensual content is strictly prohibited across all posts, servers, DMs, and voice channels.
+              </p>
+              <p>
+                <strong>3. Content & Media Uploads:</strong> You are responsible for images, videos, GIFs, custom emojis, and voice clips you upload. Do not distribute malware, pirated files, or harmful media.
+              </p>
+              <p>
+                <strong>4. Server Moderation & Safety:</strong> Server owners and authorized moderators may timeout, kick, or ban members, remove messages, and manage roles. Users may block or report bad actors anytime via Safety & Reports.
+              </p>
+              <p>
+                <strong>5. Account Security:</strong> Keep your credentials private and review active invite links regularly. Pilgrim reserves the right to suspend accounts violating safety rules.
+              </p>
+            </div>
+            <div className="px-5 py-3.5 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-end gap-2 bg-zinc-50 dark:bg-zinc-950">
+              <button
+                type="button"
+                onClick={() => setTosModalOpen(false)}
+                className="px-4 py-2 rounded-xl text-xs font-semibold text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setAcceptedTos(true);
+                  setTosModalOpen(false);
+                  if (errorMessage?.includes('Terms of Service')) setErrorMessage(null);
+                }}
+                className="px-4 py-2 rounded-xl bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 text-xs font-semibold cursor-pointer"
+              >
+                Accept & Continue
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

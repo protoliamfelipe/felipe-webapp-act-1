@@ -25,6 +25,8 @@ export interface User {
   birthDate?: string;
   squadTitle?: string;
   status?: UserStatus;
+  isStreaming?: boolean;
+  streamTitle?: string;
   blockedUserIds: string[];
   createdAt: string;
 }
@@ -38,11 +40,37 @@ export interface UserPreferences {
   voice: VoiceSettings;
 }
 
+export interface ChannelCategory {
+  id: string;
+  name: string;
+  collapsed?: boolean;
+}
+
 export interface Channel {
   id: string;
   name: string;
   type: 'text' | 'voice';
   topic?: string;
+  categoryId?: string;
+}
+
+export interface CustomEmoji {
+  id: string;
+  name: string; // shortcode without colons e.g. "hype_flame"
+  url: string;
+  animated: boolean;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+export interface ServerInvite {
+  code: string;
+  createdBy: string;
+  createdByName: string;
+  uses: number;
+  maxUses?: number;
+  expiresAt?: string;
+  createdAt: string;
 }
 
 export interface RolePermissions {
@@ -73,12 +101,18 @@ export interface Server {
   description: string;
   category: string;
   iconUrl?: string;
+  bannerUrl?: string;
   iconStyle?: string; // e.g. 'shield' | 'sword' | 'crosshair' | 'crown' | 'compass'
   ownerId: string;
   memberIds: string[];
+  categories?: ChannelCategory[];
   channels: Channel[];
   roles: ServerRole[];
   memberRoles: Record<string, string[]>;
+  customEmojis?: CustomEmoji[];
+  invites?: ServerInvite[];
+  bannedUserIds?: string[];
+  timedOutUntil?: Record<string, string>;
   createdAt: string;
 }
 
@@ -133,6 +167,8 @@ export interface VoiceParticipant {
   muted: boolean;
   deafened: boolean;
   speaking: boolean;
+  isStreaming?: boolean;
+  streamTitle?: string;
 }
 
 export interface PostComment {
@@ -192,4 +228,26 @@ export interface FriendsOverview {
   friends: User[];
   incomingRequests: Array<FriendRequest & { user: User }>;
   outgoingRequests: Array<FriendRequest & { user: User }>;
+}
+
+export interface AppNotification {
+  id: string;
+  kind: 'dm' | 'server_message' | 'reaction' | 'friend_request' | 'friend_accept' | 'system';
+  title: string;
+  body: string;
+  avatarUrl?: string;
+  createdAt: string;
+  read: boolean;
+  serverId?: string;
+  channelId?: string;
+  friendId?: string;
+  messageId?: string;
+}
+
+export interface GifItem {
+  id: string;
+  title: string;
+  category: string;
+  tags: string[];
+  url: string;
 }

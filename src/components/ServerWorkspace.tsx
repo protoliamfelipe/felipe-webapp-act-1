@@ -4,21 +4,37 @@ import {
   Volume2,
   Plus,
   Users,
-  UserPlus,
   Check,
-  Shield,
   Pin,
   Bookmark,
   MicOff,
   X,
+  ChevronDown,
+  ChevronRight,
+  Settings,
+  Link2,
+  FolderPlus,
+  PanelRightClose,
+  PanelRightOpen,
+  Menu,
+  ChevronUp,
+  User as UserIcon,
+  Radio,
+  Mic,
+  Headphones,
+  PhoneOff,
+  MonitorUp,
+  MonitorOff,
 } from 'lucide-react';
 import {
   Server,
   ChatMessage,
   User,
+  UserStatus,
   Channel,
   VoiceParticipant,
   VoiceSettings,
+  FriendsOverview,
 } from '../types';
 import { api } from '../services/api';
 import { makeInitialsAvatar } from '../utils/avatars';
@@ -32,29 +48,46 @@ import { StatusBadge } from './StatusBadge';
 import { MessageItem } from './MessageItem';
 import { ChatComposer } from './ChatComposer';
 import { VoiceChannelStage } from './VoiceChannelStage';
-import { ServerRolesModal } from './ServerRolesModal';
+import { ServerSettingsModal, ServerSettingsTab } from './ServerSettingsModal';
+import { InviteModal } from './InviteModal';
+import { MemberProfilePopover } from './MemberProfilePopover';
 import { ActiveVoiceInfo } from './Sidebar';
 
 interface ServerWorkspaceProps {
   server: Server & { isMember: boolean; memberCount: number };
   currentUser: User;
+  friendsData: FriendsOverview;
   onlineUserIds: string[];
+  streamingUserIds?: Set<string>;
+  selectedChannelId?: string | null;
+  onSelectChannelId?: (channelId: string) => void;
   incomingWsMessage: ChatMessage | null;
   incomingWsUpdatedMessage: ChatMessage | null;
   incomingWsDeletedMessageId: string | null;
   voiceParticipants: VoiceParticipant[];
   activeVoice: ActiveVoiceInfo | null;
   voiceSettings: VoiceSettings;
+  localVideoStream: MediaStream | null;
+  remoteVideoStreams: Record<string, MediaStream>;
+  isMobileMembersOpen?: boolean;
+  setIsMobileMembersOpen?: (open: boolean) => void;
+  onOpenMobileDrawer?: () => void;
   onJoinVoiceChannel: (server: Server, channel: Channel) => void;
   onLeaveVoice: () => void;
   onToggleVoiceMute: () => void;
   onToggleVoiceDeafen: () => void;
+  onStartVoiceStream: () => void;
+  onStopVoiceStream: () => void;
   onPttHoldStart: () => void;
   onPttHoldEnd: () => void;
   onSwitchVoiceInputMode: (mode: 'vad' | 'ptt') => void;
   onOpenVoiceSettings: () => void;
+  onOpenUserSettings: () => void;
+  onChangeStatus: (status: UserStatus) => void;
   onServerUpdated: (srv: Server) => void;
   onOpenProfile: (userId: string) => void;
+  onStartDm: (friendId: string) => void;
+  onSendInviteDm: (friendId: string, inviteUrl: string, serverName: string) => Promise<void>;
   onForwardMessage: (msg: ChatMessage) => void;
   onCreateReminder: (msg: ChatMessage, minutes: number) => void;
   onSpeakMessage: (msg: ChatMessage) => void;
@@ -65,29 +98,44 @@ interface ServerWorkspaceProps {
     targetUserId: string;
     targetUserName: string;
   }) => void;
-  onAddFriend: (tag: string) => void;
+  onAddFriend: (tag: string) => Promise<void>;
 }
 
 export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
   server,
   currentUser,
+  friendsData,
   onlineUserIds,
+  streamingUserIds,
+  selectedChannelId: controlledChannelId,
+  onSelectChannelId,
   incomingWsMessage,
   incomingWsUpdatedMessage,
   incomingWsDeletedMessageId,
   voiceParticipants,
   activeVoice,
   voiceSettings,
+  localVideoStream,
+  remoteVideoStreams,
+  isMobileMembersOpen = false,
+  setIsMobileMembersOpen,
+  onOpenMobileDrawer,
   onJoinVoiceChannel,
   onLeaveVoice,
   onToggleVoiceMute,
   onToggleVoiceDeafen,
+  onStartVoiceStream,
+  onStopVoiceStream,
   onPttHoldStart,
   onPttHoldEnd,
   onSwitchVoiceInputMode,
   onOpenVoiceSettings,
+  onOpenUserSettings,
+  onChangeStatus,
   onServerUpdated,
   onOpenProfile,
+  onStartDm,
+  onSendInviteDm,
   onForwardMessage,
   onCreateReminder,
   onSpeakMessage,
@@ -95,29 +143,52 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
   onReport,
   onAddFriend,
 }) => {
-  const [selectedChannelId, setSelectedChannelId] = useState<string>(
+  const [internalChannelId, setInternalChannelId] = useState<string>(
     server.channels.find((c) => c.type !== 'voice')?.id || server.channels[0]?.id || ''
   );
+  const effectiveSelectedId = controlledChannelId ?? internalChannelId;
+  const setSelectedChannelId = (id: string) => {
+    setInternalChannelId(id);
+    onSelectChannelId?.(id);
+  };
+
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [members, setMembers] = useState<User[]>([]);
   const [loading, setLoading] = useState(false);
 
-  // Channel creation state (permission-gated)
-  const [addingChannelType, setAddingChannelType] = useState<'text' | 'voice' | null>(null);
+  // Members sidebar toggle + mobile drawer
+  const [showMembers, setShowMembers] = useState(true);
+
+  // Server dropdown, settings, invite, and member card state
+  const [serverMenuOpen, setServerMenuOpen] = useState(false);
+  const [serverSettingsOpen, setServerSettingsOpen] = useState(false);
+  const [serverSettingsTab, setServerSettingsTab] = useState<ServerSettingsTab>('overview');
+  const [inviteModalOpen, setInviteModalOpen] = useState(false);
+  const [selectedMemberCard, setSelectedMemberCard] = useState<User | null>(null);
+
+  // Categories & inline channel/category creation state
+  const [collapsedCatIds, setCollapsedCatIds] = useState<Record<string, boolean>>({});
+  const [creatingCatOpen, setCreatingCatOpen] = useState(false);
+  const [newCategoryName, setNewCategoryName] = useState('');
+  const [addingChannelTarget, setAddingChannelTarget] = useState<{
+    type: 'text' | 'voice';
+    categoryId?: string;
+  } | null>(null);
   const [newChannelName, setNewChannelName] = useState('');
 
   // Message interactions state
   const [replyTarget, setReplyTarget] = useState<ChatMessage | null>(null);
   const [unreadMarkerMessageId, setUnreadMarkerMessageId] = useState<string | null>(null);
   const [drawerMode, setDrawerMode] = useState<'none' | 'pinned' | 'bookmarks'>('none');
-  const [rolesModalOpen, setRolesModalOpen] = useState(false);
+  const [statusMenuOpen, setStatusMenuOpen] = useState(false);
 
   const bottomRef = useRef<HTMLDivElement>(null);
+  const serverMenuRef = useRef<HTMLDivElement>(null);
+  const statusFooterRef = useRef<HTMLDivElement>(null);
 
   // Permissions for current user in this server
+  const canManageServer = hasServerPermission(server, currentUser.id, 'manageServer');
   const canManageChannels = hasServerPermission(server, currentUser.id, 'manageChannels');
-  const canManageRoles = hasServerPermission(server, currentUser.id, 'manageRoles');
-  const canKickMembers = hasServerPermission(server, currentUser.id, 'kickMembers');
   const canSendMessages = hasServerPermission(server, currentUser.id, 'sendMessages');
   const canAttachFiles = hasServerPermission(server, currentUser.id, 'attachFiles');
   const canManageMessages = hasServerPermission(server, currentUser.id, 'manageMessages');
@@ -126,21 +197,44 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
   const canConnectVoice = hasServerPermission(server, currentUser.id, 'connectVoice');
   const canSpeakVoice = hasServerPermission(server, currentUser.id, 'speakVoice');
 
+  // Check active timeout on current user
+  const myTimeoutIso = server.timedOutUntil?.[currentUser.id];
+  const isTimedOut = Boolean(myTimeoutIso && new Date(myTimeoutIso).getTime() > Date.now());
+
   const textChannels = server.channels.filter((c) => c.type !== 'voice');
   const voiceChannels = server.channels.filter((c) => c.type === 'voice');
+  const categories = server.categories || [];
   const activeChannel =
-    server.channels.find((c) => c.id === selectedChannelId) ||
+    server.channels.find((c) => c.id === effectiveSelectedId) ||
     textChannels[0] ||
     server.channels[0];
 
   useEffect(() => {
     const defaultCh =
       server.channels.find((c) => c.type !== 'voice')?.id || server.channels[0]?.id || '';
-    setSelectedChannelId(defaultCh);
+    if (!controlledChannelId || !server.channels.some((c) => c.id === controlledChannelId)) {
+      setSelectedChannelId(defaultCh);
+    }
     setReplyTarget(null);
     setDrawerMode('none');
-    setAddingChannelType(null);
+    setAddingChannelTarget(null);
+    setCreatingCatOpen(false);
+    setServerMenuOpen(false);
+    setSelectedMemberCard(null);
   }, [server.id]);
+
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (serverMenuRef.current && !serverMenuRef.current.contains(e.target as Node)) {
+        setServerMenuOpen(false);
+      }
+      if (statusFooterRef.current && !statusFooterRef.current.contains(e.target as Node)) {
+        setStatusMenuOpen(false);
+      }
+    };
+    if (serverMenuOpen || statusMenuOpen) document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [serverMenuOpen, statusMenuOpen]);
 
   useEffect(() => {
     if (!activeChannel || activeChannel.type === 'voice') return;
@@ -206,6 +300,29 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
     }
   }, [messages.length, activeChannel?.id, activeChannel?.type]);
 
+  const handleOpenMemberPopoverById = (userId: string) => {
+    const found = members.find((m) => m.id === userId);
+    if (found) {
+      setSelectedMemberCard(found);
+      return;
+    }
+    const fromMsg = messages.find((m) => m.authorId === userId);
+    if (fromMsg) {
+      setSelectedMemberCard({
+        id: fromMsg.authorId,
+        email: '',
+        name: fromMsg.authorName,
+        tag: fromMsg.authorTag,
+        avatarUrl: fromMsg.authorAvatar,
+        bio: '',
+        blockedUserIds: [],
+        createdAt: fromMsg.createdAt,
+      });
+      return;
+    }
+    onOpenProfile(userId);
+  };
+
   const handleSendMessage = async (payload: {
     content: string;
     attachmentFile?: File | null;
@@ -226,23 +343,38 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
     });
   };
 
-  const handleCreateChannel = async (e: React.FormEvent) => {
+  const handleCreateCategorySubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!newChannelName.trim() || !addingChannelType) return;
+    if (!newCategoryName.trim()) return;
+    try {
+      const res = await api.createCategory(server.id, newCategoryName.trim());
+      onServerUpdated(res.server);
+      setNewCategoryName('');
+      setCreatingCatOpen(false);
+      onNotify(`Created category "${res.category.name}".`);
+    } catch (err: any) {
+      onNotify(err?.message || 'Unable to create category.');
+    }
+  };
+
+  const handleCreateChannelSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!newChannelName.trim() || !addingChannelTarget) return;
     try {
       const res = await api.createChannel(server.id, {
         name: newChannelName.trim(),
-        type: addingChannelType,
+        type: addingChannelTarget.type,
+        categoryId: addingChannelTarget.categoryId,
       });
       onServerUpdated(res.server);
       setSelectedChannelId(res.channel.id);
-      if (addingChannelType === 'voice' && canConnectVoice) {
+      if (addingChannelTarget.type === 'voice' && canConnectVoice) {
         onJoinVoiceChannel(res.server, res.channel);
       }
       setNewChannelName('');
-      setAddingChannelType(null);
+      setAddingChannelTarget(null);
       onNotify(
-        `Created ${addingChannelType === 'voice' ? 'voice' : 'text'} channel "${res.channel.name}".`
+        `Created ${addingChannelTarget.type === 'voice' ? 'voice' : 'text'} channel "${res.channel.name}".`
       );
     } catch (err: any) {
       onNotify(err?.message || 'Unable to create channel.');
@@ -283,224 +415,711 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
     (m.bookmarkedByUserIds || []).includes(currentUser.id)
   );
 
-  return (
-    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden flex flex-col lg:flex-row h-[calc(100vh-8.5rem)] min-h-[540px] transition-colors">
-      {/* Left: Channels Column (Text + Voice + Roles Button) */}
-      <div className="w-full lg:w-64 bg-zinc-50 dark:bg-zinc-950 border-b lg:border-b-0 lg:border-r border-zinc-200 dark:border-zinc-800 flex flex-col shrink-0">
-        <div className="p-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2">
-          <div className="flex items-center gap-2.5 min-w-0">
-            <ServerIconBadge server={server} active size="sm" />
-            <div className="min-w-0">
-              <h2 className="font-display text-sm font-bold text-zinc-950 dark:text-zinc-50 truncate">
-                {server.name}
-              </h2>
-              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 mt-0.5 line-clamp-1">
-                {server.description}
+  const renderChannelButton = (ch: Channel) => {
+    const isVoice = ch.type === 'voice';
+    const active = ch.id === activeChannel?.id;
+    const connectedHere =
+      isVoice && activeVoice?.serverId === server.id && activeVoice?.channelId === ch.id;
+    const roomUsers = isVoice ? voiceParticipants.filter((p) => p.channelId === ch.id) : [];
+
+    return (
+      <div key={ch.id} className="space-y-1">
+        <button
+          type="button"
+          onClick={() => {
+            setSelectedChannelId(ch.id);
+            setDrawerMode('none');
+            if (isVoice && !connectedHere && canConnectVoice) {
+              onJoinVoiceChannel(server, ch);
+            }
+          }}
+          className={`w-full flex items-center justify-between gap-2 px-2.5 py-2 rounded-xl text-xs transition-colors whitespace-nowrap cursor-pointer ${
+            active
+              ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950 font-semibold'
+              : connectedHere
+              ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold'
+              : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-white'
+          }`}
+        >
+          <span className="flex items-center gap-2 min-w-0">
+            {isVoice ? (
+              <Volume2 className="w-3.5 h-3.5 shrink-0 opacity-80" />
+            ) : (
+              <Hash className="w-3.5 h-3.5 shrink-0 opacity-75" />
+            )}
+            <span className="truncate">{ch.name}</span>
+          </span>
+          {isVoice && roomUsers.length > 0 && (
+            <span className="text-[10px] font-mono tabular-nums opacity-75">
+              {roomUsers.length}
+            </span>
+          )}
+        </button>
+
+        {isVoice && roomUsers.length > 0 && (
+          <div className="pl-6 space-y-1">
+            {roomUsers.map((p) => {
+              const pStreaming = Boolean(p.isStreaming || streamingUserIds?.has(p.userId));
+              return (
+                <button
+                  key={p.userId}
+                  type="button"
+                  onClick={() => handleOpenMemberPopoverById(p.userId)}
+                  className="w-full flex items-center justify-between gap-2 px-2 py-1 rounded-lg text-[11px] text-zinc-600 dark:text-zinc-300 hover:bg-zinc-200/60 dark:hover:bg-zinc-800/70 cursor-pointer text-left"
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <img
+                      src={p.userAvatar}
+                      alt={p.userName}
+                      onError={(e) => {
+                        (e.target as HTMLImageElement).src = makeInitialsAvatar(p.userName);
+                      }}
+                      className={`w-5 h-5 rounded-full object-cover ${
+                        pStreaming
+                          ? 'ring-2 ring-red-500 border border-zinc-950'
+                          : p.speaking && !p.muted
+                          ? 'border border-emerald-500 ring-2 ring-emerald-500'
+                          : 'border border-zinc-300 dark:border-zinc-700'
+                      }`}
+                    />
+                    <span className="truncate">{p.userName}</span>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0">
+                    {pStreaming && (
+                      <span className="px-1 py-0.2 rounded bg-red-600 text-white text-[9px] font-bold">
+                        LIVE
+                      </span>
+                    )}
+                    {p.muted && <MicOff className="w-3 h-3 text-red-400 shrink-0" />}
+                  </div>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderMembersListContent = () => (
+    <div className="flex-1 overflow-y-auto p-3 space-y-1.5">
+      {members.map((m) => {
+        const effectiveStatus = getEffectiveStatus(m, onlineUserIds, currentUser.id);
+        const isOwner = m.id === server.ownerId;
+        const memberRoles = getMemberRoles(server, m.id);
+        const topRole = memberRoles[0];
+        const isMemberStreaming = Boolean(m.isStreaming || streamingUserIds?.has(m.id));
+        return (
+          <button
+            key={m.id}
+            type="button"
+            onClick={() => handleOpenMemberPopoverById(m.id)}
+            className="w-full flex items-center gap-2.5 p-2 rounded-xl hover:bg-white dark:hover:bg-zinc-900 border border-transparent hover:border-zinc-200 dark:hover:border-zinc-800 transition-colors text-left cursor-pointer"
+          >
+            <div className="relative shrink-0">
+              <img
+                src={m.avatarUrl}
+                alt={m.name}
+                referrerPolicy="no-referrer"
+                onError={(e) => {
+                  (e.target as HTMLImageElement).src = makeInitialsAvatar(m.name);
+                }}
+                className={`w-8 h-8 rounded-full object-cover ${
+                  isMemberStreaming
+                    ? 'ring-2 ring-red-500 border border-zinc-950'
+                    : 'border border-zinc-200 dark:border-zinc-700'
+                }`}
+              />
+              {isMemberStreaming ? (
+                <span className="absolute -bottom-1 -right-1 px-1 rounded-full bg-red-600 text-white text-[8px] font-extrabold border border-white dark:border-zinc-950">
+                  LIVE
+                </span>
+              ) : (
+                <span className="absolute -bottom-0.5 -right-0.5">
+                  <StatusBadge status={effectiveStatus} size="sm" />
+                </span>
+              )}
+            </div>
+            <div className="min-w-0 flex-1">
+              <p
+                className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate"
+                style={
+                  topRole?.color && topRole.color !== '#fafafa'
+                    ? { color: topRole.color }
+                    : undefined
+                }
+              >
+                {m.name}
+              </p>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                {isMemberStreaming ? (
+                  <span className="text-red-500 font-semibold">Live Streaming</span>
+                ) : isOwner ? (
+                  'Owner'
+                ) : topRole ? (
+                  topRole.name
+                ) : effectiveStatus === 'dnd' ? (
+                  'Do Not Disturb'
+                ) : (
+                  effectiveStatus.charAt(0).toUpperCase() + effectiveStatus.slice(1)
+                )}
               </p>
             </div>
-          </div>
+          </button>
+        );
+      })}
+    </div>
+  );
+
+  // Organize channels by categories
+  const validCategoryIds = new Set(categories.map((c) => c.id));
+  const uncategorizedChannels = server.channels.filter(
+    (c) => !c.categoryId || !validCategoryIds.has(c.categoryId)
+  );
+  const uncategorizedText = uncategorizedChannels.filter((c) => c.type !== 'voice');
+  const uncategorizedVoice = uncategorizedChannels.filter((c) => c.type === 'voice');
+
+  const popoverPendingDirection: 'incoming' | 'outgoing' | null = selectedMemberCard
+    ? friendsData.incomingRequests.some((r) => r.user.id === selectedMemberCard.id)
+      ? 'incoming'
+      : friendsData.outgoingRequests.some((r) => r.user.id === selectedMemberCard.id)
+      ? 'outgoing'
+      : null
+    : null;
+
+  const isMeStreaming = Boolean(currentUser.isStreaming || streamingUserIds?.has(currentUser.id));
+  const myStatus: UserStatus = currentUser.status || 'online';
+  const myStatusLabel =
+    myStatus === 'dnd'
+      ? 'Do Not Disturb'
+      : myStatus.charAt(0).toUpperCase() + myStatus.slice(1);
+
+  return (
+    <div className="bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl lg:rounded-none lg:border-0 overflow-hidden flex flex-col lg:flex-row h-[calc(100vh-11.5rem)] lg:h-[calc(100vh-4rem)] min-h-[480px] transition-colors relative">
+      {/* Desktop Left: Server Banner + Categories & Channels */}
+      <div className="hidden lg:flex w-64 bg-zinc-50 dark:bg-zinc-950 border-r border-zinc-200 dark:border-zinc-800 flex-col shrink-0">
+        {/* Server Banner + Dropdown Trigger */}
+        <div ref={serverMenuRef} className="relative border-b border-zinc-200 dark:border-zinc-800">
+          {server.bannerUrl && (
+            <div className="h-28 w-full relative overflow-hidden bg-zinc-950">
+              <img
+                src={server.bannerUrl}
+                alt={`${server.name} banner`}
+                className="w-full h-full object-cover"
+              />
+              <div className="absolute inset-0 bg-gradient-to-t from-black/75 via-black/25 to-transparent" />
+            </div>
+          )}
 
           <button
             type="button"
-            onClick={() => setRolesModalOpen(true)}
-            title={
-              canManageRoles || canKickMembers
-                ? 'Manage Roles & Permissions'
-                : 'View Server Roles'
-            }
-            className="p-1.5 rounded-lg bg-white dark:bg-zinc-900 hover:bg-zinc-200 dark:hover:bg-zinc-800 text-zinc-700 dark:text-zinc-200 border border-zinc-200 dark:border-zinc-800 cursor-pointer shrink-0"
+            onClick={() => setServerMenuOpen((v) => !v)}
+            className={`w-full px-3.5 py-3 flex items-center justify-between gap-2 text-left transition-colors cursor-pointer ${
+              server.bannerUrl
+                ? 'absolute inset-x-0 bottom-0 text-white hover:bg-black/25'
+                : 'hover:bg-zinc-100 dark:hover:bg-zinc-900'
+            }`}
           >
-            <Shield className="w-4 h-4" />
-          </button>
-        </div>
-
-        <div className="p-3 flex-1 overflow-y-auto space-y-4">
-          {/* Text Channels */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
-                Text Channels
-              </span>
-              {canManageChannels && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setAddingChannelType((prev) => (prev === 'text' ? null : 'text'))
-                  }
-                  title="Create Text Channel"
-                  className="p-1 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer"
+            <div className="flex items-center gap-2.5 min-w-0">
+              {!server.bannerUrl && <ServerIconBadge server={server} active size="sm" />}
+              <div className="min-w-0">
+                <h2
+                  className={`font-display text-sm font-bold truncate ${
+                    server.bannerUrl ? 'text-white drop-shadow-xs' : 'text-zinc-950 dark:text-zinc-50'
+                  }`}
                 >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
-              )}
+                  {server.name}
+                </h2>
+                {!server.bannerUrl && (
+                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400 line-clamp-1">
+                    {server.description || `${members.length} members`}
+                  </p>
+                )}
+              </div>
             </div>
+            <ChevronDown
+              className={`w-4 h-4 shrink-0 transition-transform ${
+                serverMenuOpen ? 'rotate-180' : ''
+              } ${server.bannerUrl ? 'text-white' : 'text-zinc-500'}`}
+            />
+          </button>
 
-            {addingChannelType === 'text' && (
-              <form
-                onSubmit={handleCreateChannel}
-                className="flex items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg"
+          {/* Server Actions Dropdown Menu */}
+          {serverMenuOpen && (
+            <div className="absolute left-2 right-2 top-full mt-1.5 z-40 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-2xl py-1.5 text-xs">
+              <button
+                type="button"
+                onClick={() => {
+                  setServerMenuOpen(false);
+                  setInviteModalOpen(true);
+                }}
+                className="w-full px-3 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 text-indigo-600 dark:text-indigo-400 font-semibold cursor-pointer"
               >
-                <input
-                  type="text"
-                  placeholder="new-text-channel"
-                  value={newChannelName}
-                  onChange={(e) => setNewChannelName(e.target.value)}
-                  className="flex-1 min-w-0 px-2 py-1 text-xs bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none"
-                  autoFocus
-                />
-                <button
-                  type="submit"
-                  className="p-1 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 rounded text-xs cursor-pointer"
-                  aria-label="Save text channel"
-                >
-                  <Check className="w-3 h-3" />
-                </button>
-              </form>
-            )}
+                <Link2 className="w-3.5 h-3.5" />
+                <span>Invite People</span>
+              </button>
 
-            <div className="flex lg:flex-col gap-1 overflow-x-auto pb-1 lg:pb-0">
-              {textChannels.map((ch) => {
-                const active = ch.id === activeChannel?.id;
-                return (
+              <button
+                type="button"
+                onClick={() => {
+                  setServerMenuOpen(false);
+                  setServerSettingsTab('overview');
+                  setServerSettingsOpen(true);
+                }}
+                className="w-full px-3 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 text-zinc-800 dark:text-zinc-200 cursor-pointer"
+              >
+                <Settings className="w-3.5 h-3.5 text-zinc-500" />
+                <span>Server Settings</span>
+              </button>
+
+              {canManageChannels && (
+                <>
+                  <div className="my-1 border-t border-zinc-200 dark:border-zinc-800" />
                   <button
-                    key={ch.id}
                     type="button"
                     onClick={() => {
-                      setSelectedChannelId(ch.id);
-                      setDrawerMode('none');
+                      setServerMenuOpen(false);
+                      setCreatingCatOpen(true);
                     }}
-                    className={`flex items-center gap-2 px-3 py-2 rounded-xl text-xs transition-colors whitespace-nowrap cursor-pointer ${
-                      active
-                        ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950 font-semibold'
-                        : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-white'
-                    }`}
+                    className="w-full px-3 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 text-zinc-800 dark:text-zinc-200 cursor-pointer"
                   >
-                    <Hash className="w-3.5 h-3.5 shrink-0 opacity-75" />
-                    <span className="truncate">{ch.name}</span>
+                    <FolderPlus className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>Create Category</span>
                   </button>
-                );
-              })}
-            </div>
-          </div>
-
-          {/* Voice Channels */}
-          <div className="space-y-1.5">
-            <div className="flex items-center justify-between px-1">
-              <span className="text-[11px] font-semibold text-zinc-500 dark:text-zinc-400">
-                Voice Channels
-              </span>
-              {canManageChannels && (
-                <button
-                  type="button"
-                  onClick={() =>
-                    setAddingChannelType((prev) => (prev === 'voice' ? null : 'voice'))
-                  }
-                  title="Create Voice Channel"
-                  className="p-1 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer"
-                >
-                  <Plus className="w-3.5 h-3.5" />
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setServerMenuOpen(false);
+                      setAddingChannelTarget({ type: 'text' });
+                    }}
+                    className="w-full px-3 py-2 hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-2.5 text-zinc-800 dark:text-zinc-200 cursor-pointer"
+                  >
+                    <Plus className="w-3.5 h-3.5 text-zinc-500" />
+                    <span>Create Channel</span>
+                  </button>
+                </>
               )}
             </div>
+          )}
+        </div>
 
-            {addingChannelType === 'voice' && (
-              <form
-                onSubmit={handleCreateChannel}
-                className="flex items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg"
-              >
+        {/* Categories & Channels Scrollable Tree */}
+        <div className="p-3 flex-1 overflow-y-auto space-y-4">
+          {/* Quick Inline Category Creator */}
+          {creatingCatOpen && canManageChannels && (
+            <form
+              onSubmit={handleCreateCategorySubmit}
+              className="p-2 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl space-y-1.5"
+            >
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold uppercase text-zinc-500">New Category</span>
+                <button
+                  type="button"
+                  onClick={() => setCreatingCatOpen(false)}
+                  className="text-zinc-400 hover:text-zinc-900 dark:hover:text-white cursor-pointer"
+                >
+                  <X className="w-3 h-3" />
+                </button>
+              </div>
+              <div className="flex items-center gap-1">
                 <input
                   type="text"
-                  placeholder="Voice room name"
-                  value={newChannelName}
-                  onChange={(e) => setNewChannelName(e.target.value)}
-                  className="flex-1 min-w-0 px-2 py-1 text-xs bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                  value={newCategoryName}
+                  onChange={(e) => setNewCategoryName(e.target.value)}
+                  placeholder="CATEGORY NAME"
                   autoFocus
+                  className="flex-1 min-w-0 px-2 py-1 text-xs bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 rounded-lg text-zinc-900 dark:text-white focus:outline-none"
                 />
                 <button
                   type="submit"
-                  className="p-1 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 rounded text-xs cursor-pointer"
-                  aria-label="Save voice channel"
+                  className="p-1.5 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 rounded-lg cursor-pointer"
+                  aria-label="Save category"
                 >
                   <Check className="w-3 h-3" />
                 </button>
-              </form>
-            )}
+              </div>
+            </form>
+          )}
 
-            <div className="space-y-1">
-              {voiceChannels.length === 0 ? (
-                <p className="px-2 py-1 text-[11px] text-zinc-400">No voice channels yet.</p>
-              ) : (
-                voiceChannels.map((vc) => {
-                  const active = vc.id === activeChannel?.id;
-                  const connectedHere =
-                    activeVoice?.serverId === server.id && activeVoice?.channelId === vc.id;
-                  const roomUsers = voiceParticipants.filter((p) => p.channelId === vc.id);
+          {/* Uncategorized Channels */}
+          {categories.length === 0 ? (
+            <>
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                    Text Channels
+                  </span>
+                  {canManageChannels && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAddingChannelTarget((prev) =>
+                          prev?.type === 'text' && !prev.categoryId ? null : { type: 'text' }
+                        )
+                      }
+                      title="Create Text Channel"
+                      className="p-1 text-zinc-500 hover:text-zinc-950 dark:hover:text-white rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
 
-                  return (
-                    <div key={vc.id} className="space-y-1">
+                {addingChannelTarget?.type === 'text' && !addingChannelTarget.categoryId && (
+                  <form
+                    onSubmit={handleCreateChannelSubmit}
+                    className="flex items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg"
+                  >
+                    <input
+                      type="text"
+                      placeholder="new-text-channel"
+                      value={newChannelName}
+                      onChange={(e) => setNewChannelName(e.target.value)}
+                      className="flex-1 min-w-0 px-2 py-1 text-xs bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                      autoFocus
+                    />
+                    <button
+                      type="submit"
+                      className="p-1 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 rounded text-xs cursor-pointer"
+                    >
+                      <Check className="w-3 h-3" />
+                    </button>
+                  </form>
+                )}
+
+                <div className="space-y-1">{uncategorizedText.map(renderChannelButton)}</div>
+              </div>
+
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between px-1">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400">
+                    Voice Channels
+                  </span>
+                  {canManageChannels && (
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setAddingChannelTarget((prev) =>
+                          prev?.type === 'voice' && !prev.categoryId ? null : { type: 'voice' }
+                        )
+                      }
+                      title="Create Voice Channel"
+                      className="p-1 text-zinc-500 hover:text-zinc-950 dark:hover:text-white rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer"
+                    >
+                      <Plus className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+
+                {addingChannelTarget?.type === 'voice' && !addingChannelTarget.categoryId && (
+                  <form
+                    onSubmit={handleCreateChannelSubmit}
+                    className="flex items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg"
+                  >
+                    <input
+                      type="text"
+                      placeholder="Voice room name"
+                      value={newChannelName}
+                      onChange={(e) => setNewChannelName(e.target.value)}
+                      className="flex-1 min-w-0 px-2 py-1 text-xs bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                      autoFocus
+                    />
+                    <button
+                      type="submit"
+                      className="p-1 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 rounded text-xs cursor-pointer"
+                    >
+                      <Check className="w-3 h-3" />
+                    </button>
+                  </form>
+                )}
+
+                <div className="space-y-1">
+                  {uncategorizedVoice.length === 0 ? (
+                    <p className="px-2 py-1 text-[11px] text-zinc-400">No voice channels yet.</p>
+                  ) : (
+                    uncategorizedVoice.map(renderChannelButton)
+                  )}
+                </div>
+              </div>
+            </>
+          ) : (
+            <>
+              {uncategorizedChannels.length > 0 && (
+                <div className="space-y-1">{uncategorizedChannels.map(renderChannelButton)}</div>
+              )}
+
+              {categories.map((cat) => {
+                const collapsed = Boolean(collapsedCatIds[cat.id]);
+                const catChannels = server.channels.filter((c) => c.categoryId === cat.id);
+                const isAddingHere = addingChannelTarget?.categoryId === cat.id;
+
+                return (
+                  <div key={cat.id} className="space-y-1">
+                    <div className="flex items-center justify-between px-1 group">
                       <button
                         type="button"
-                        onClick={() => {
-                          setSelectedChannelId(vc.id);
-                          setDrawerMode('none');
-                          if (!connectedHere && canConnectVoice) {
-                            onJoinVoiceChannel(server, vc);
-                          }
-                        }}
-                        className={`w-full flex items-center justify-between gap-2 px-3 py-2 rounded-xl text-xs transition-colors whitespace-nowrap cursor-pointer ${
-                          active
-                            ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950 font-semibold'
-                            : connectedHere
-                            ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold'
-                            : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-white'
-                        }`}
+                        onClick={() =>
+                          setCollapsedCatIds((prev) => ({ ...prev, [cat.id]: !prev[cat.id] }))
+                        }
+                        className="flex items-center gap-1 text-[11px] font-bold uppercase tracking-wider text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white cursor-pointer truncate"
                       >
-                        <span className="flex items-center gap-2 min-w-0">
-                          <Volume2 className="w-3.5 h-3.5 shrink-0 opacity-80" />
-                          <span className="truncate">{vc.name}</span>
-                        </span>
-                        {roomUsers.length > 0 && (
-                          <span className="text-[10px] font-mono tabular-nums opacity-75">
-                            {roomUsers.length}
-                          </span>
+                        {collapsed ? (
+                          <ChevronRight className="w-3 h-3 shrink-0" />
+                        ) : (
+                          <ChevronDown className="w-3 h-3 shrink-0" />
                         )}
+                        <span className="truncate">{cat.name}</span>
                       </button>
 
-                      {/* Indented live voice participants */}
-                      {roomUsers.length > 0 && (
-                        <div className="pl-6 space-y-1">
-                          {roomUsers.map((p) => (
-                            <div
-                              key={p.userId}
-                              className="flex items-center justify-between gap-2 px-2 py-1 rounded-lg text-[11px] text-zinc-600 dark:text-zinc-300"
-                            >
-                              <div className="flex items-center gap-2 min-w-0">
-                                <img
-                                  src={p.userAvatar}
-                                  alt={p.userName}
-                                  onError={(e) => {
-                                    (e.target as HTMLImageElement).src = makeInitialsAvatar(
-                                      p.userName
-                                    );
-                                  }}
-                                  className={`w-5 h-5 rounded-full object-cover border ${
-                                    p.speaking && !p.muted
-                                      ? 'border-emerald-500 ring-2 ring-emerald-500/40'
-                                      : 'border-zinc-300 dark:border-zinc-700'
-                                  }`}
-                                />
-                                <span className="truncate">{p.userName}</span>
-                              </div>
-                              {p.muted && <MicOff className="w-3 h-3 text-red-400 shrink-0" />}
-                            </div>
-                          ))}
-                        </div>
+                      {canManageChannels && (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            setAddingChannelTarget((prev) =>
+                              prev?.categoryId === cat.id
+                                ? null
+                                : { type: 'text', categoryId: cat.id }
+                            )
+                          }
+                          title={`Add channel to ${cat.name}`}
+                          className="p-1 text-zinc-500 hover:text-zinc-950 dark:hover:text-white rounded hover:bg-zinc-200 dark:hover:bg-zinc-800 cursor-pointer shrink-0"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                        </button>
                       )}
                     </div>
-                  );
-                })
-              )}
+
+                    {isAddingHere && (
+                      <form
+                        onSubmit={handleCreateChannelSubmit}
+                        className="p-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-lg space-y-1.5"
+                      >
+                        <div className="flex items-center gap-1">
+                          <input
+                            type="text"
+                            placeholder="channel-name"
+                            value={newChannelName}
+                            onChange={(e) => setNewChannelName(e.target.value)}
+                            className="flex-1 min-w-0 px-2 py-1 text-xs bg-transparent text-zinc-900 dark:text-zinc-100 focus:outline-none"
+                            autoFocus
+                          />
+                          <button
+                            type="submit"
+                            className="p-1 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 rounded text-xs cursor-pointer"
+                          >
+                            <Check className="w-3 h-3" />
+                          </button>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {(['text', 'voice'] as const).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() =>
+                                setAddingChannelTarget({ type: t, categoryId: cat.id })
+                              }
+                              className={`flex-1 py-0.5 rounded text-[10px] font-semibold capitalize cursor-pointer ${
+                                addingChannelTarget?.type === t
+                                  ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950'
+                                  : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-500'
+                              }`}
+                            >
+                              {t}
+                            </button>
+                          ))}
+                        </div>
+                      </form>
+                    )}
+
+                    {!collapsed && (
+                      <div className="space-y-1">
+                        {catChannels.length === 0 ? (
+                          <p className="px-2 py-1 text-[11px] text-zinc-400">Empty category</p>
+                        ) : (
+                          catChannels.map(renderChannelButton)
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </>
+          )}
+        </div>
+
+        {/* Active Voice Connection Dock inside Server Sidebar (Desktop Discord Layout) */}
+        {activeVoice && (
+          <div className="px-3 py-2.5 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-100/90 dark:bg-zinc-900/95 space-y-2 shrink-0">
+            <div className="flex items-center justify-between gap-2">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 text-[11px] font-bold text-emerald-600 dark:text-emerald-400">
+                  <Radio className="w-3.5 h-3.5 shrink-0" />
+                  <span>Voice Connected</span>
+                </div>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
+                  {activeVoice.channelName} · {activeVoice.serverName}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={onLeaveVoice}
+                title="Disconnect from voice"
+                className="p-1.5 rounded-lg bg-white dark:bg-zinc-950 hover:bg-red-500/15 text-zinc-600 dark:text-zinc-300 hover:text-red-500 border border-zinc-200 dark:border-zinc-800 cursor-pointer"
+              >
+                <PhoneOff className="w-3.5 h-3.5" />
+              </button>
             </div>
+
+            <div className="flex items-center gap-1.5">
+              <button
+                type="button"
+                onClick={onToggleVoiceMute}
+                title={activeVoice.muted ? 'Unmute Mic' : 'Mute Mic'}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border cursor-pointer ${
+                  activeVoice.muted
+                    ? 'bg-red-500/15 text-red-500 border-red-500/30'
+                    : 'bg-white dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-800'
+                }`}
+              >
+                {activeVoice.muted ? <MicOff className="w-3.5 h-3.5" /> : <Mic className="w-3.5 h-3.5" />}
+                <span>{activeVoice.muted ? 'Muted' : 'Mic'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={onToggleVoiceDeafen}
+                title={activeVoice.deafened ? 'Undeafen' : 'Deafen'}
+                className={`flex-1 py-1.5 px-2 rounded-lg text-[11px] font-semibold flex items-center justify-center gap-1 border cursor-pointer ${
+                  activeVoice.deafened
+                    ? 'bg-red-500/15 text-red-500 border-red-500/30'
+                    : 'bg-white dark:bg-zinc-950 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-800'
+                }`}
+              >
+                <Headphones className="w-3.5 h-3.5" />
+                <span>{activeVoice.deafened ? 'Deaf' : 'Audio'}</span>
+              </button>
+              <button
+                type="button"
+                onClick={activeVoice.isStreaming ? onStopVoiceStream : onStartVoiceStream}
+                title={activeVoice.isStreaming ? 'Stop Live Stream' : 'Share Screen / Go Live'}
+                className={`p-1.5 rounded-lg border cursor-pointer ${
+                  activeVoice.isStreaming
+                    ? 'bg-red-600 text-white border-red-500'
+                    : 'bg-white dark:bg-zinc-950 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-800'
+                }`}
+              >
+                {activeVoice.isStreaming ? (
+                  <MonitorOff className="w-3.5 h-3.5" />
+                ) : (
+                  <MonitorUp className="w-3.5 h-3.5" />
+                )}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* User Status & Settings Gear Footer (Discord style inside Server Column) */}
+        <div
+          ref={statusFooterRef}
+          className="p-2.5 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-100/70 dark:bg-black shrink-0 relative"
+        >
+          {statusMenuOpen && (
+            <div className="absolute bottom-full left-2 right-2 mb-2 bg-zinc-900 border border-zinc-800 rounded-2xl shadow-2xl overflow-hidden z-50">
+              <div className="p-2 border-b border-zinc-800">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setStatusMenuOpen(false);
+                    onOpenProfile(currentUser.id);
+                  }}
+                  className="w-full px-3 py-2 rounded-xl hover:bg-zinc-800 flex items-center justify-between text-xs font-semibold text-white cursor-pointer"
+                >
+                  <span className="flex items-center gap-2">
+                    <UserIcon className="w-3.5 h-3.5 text-zinc-400" />
+                    <span>Open My Profile</span>
+                  </span>
+                  <ChevronRight className="w-3.5 h-3.5 text-zinc-500" />
+                </button>
+              </div>
+              <div className="p-1.5 space-y-0.5">
+                {(['online', 'idle', 'dnd', 'invisible'] as UserStatus[]).map((st) => (
+                  <button
+                    key={st}
+                    type="button"
+                    onClick={() => {
+                      onChangeStatus(st);
+                      setStatusMenuOpen(false);
+                    }}
+                    className={`w-full px-3 py-1.5 rounded-lg flex items-center gap-2 text-xs font-semibold cursor-pointer ${
+                      myStatus === st ? 'bg-zinc-800 text-white' : 'text-zinc-300 hover:bg-zinc-800/70'
+                    }`}
+                  >
+                    <StatusBadge status={st} size="sm" />
+                    <span>
+                      {st === 'dnd' ? 'Do Not Disturb' : st.charAt(0).toUpperCase() + st.slice(1)}
+                    </span>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          <div className="flex items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setStatusMenuOpen((v) => !v)}
+              className="flex-1 p-1.5 rounded-xl hover:bg-zinc-200/70 dark:hover:bg-zinc-900 transition-colors flex items-center gap-2 text-left cursor-pointer min-w-0"
+            >
+              <div className="relative shrink-0">
+                <img
+                  src={currentUser.avatarUrl}
+                  alt={currentUser.name}
+                  onError={(e) => {
+                    (e.target as HTMLImageElement).src = makeInitialsAvatar(currentUser.name);
+                  }}
+                  className={`w-8 h-8 rounded-full object-cover ${
+                    isMeStreaming
+                      ? 'ring-2 ring-red-500 border border-black'
+                      : 'border border-zinc-300 dark:border-zinc-700'
+                  }`}
+                />
+                {isMeStreaming ? (
+                  <span className="absolute -bottom-1 -right-1 px-1 rounded-full bg-red-600 text-white text-[7px] font-extrabold border border-black">
+                    LIVE
+                  </span>
+                ) : (
+                  <span className="absolute -bottom-0.5 -right-0.5">
+                    <StatusBadge status={myStatus} size="sm" />
+                  </span>
+                )}
+              </div>
+              <div className="min-w-0 flex-1">
+                <p className="text-xs font-semibold text-zinc-950 dark:text-white truncate">
+                  {currentUser.name}
+                </p>
+                <p className="text-[10px] text-zinc-500 dark:text-zinc-400 truncate">
+                  {isMeStreaming ? (
+                    <span className="text-red-500 font-semibold">Live Streaming</span>
+                  ) : (
+                    myStatusLabel
+                  )}
+                </p>
+              </div>
+              <ChevronUp
+                className={`w-3.5 h-3.5 text-zinc-400 shrink-0 transition-transform ${
+                  statusMenuOpen ? 'rotate-180' : ''
+                }`}
+              />
+            </button>
+
+            <button
+              type="button"
+              onClick={onOpenUserSettings}
+              title="User Settings"
+              aria-label="User Settings"
+              className="p-2 rounded-xl hover:bg-zinc-200/70 dark:hover:bg-zinc-900 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white transition-colors cursor-pointer shrink-0"
+            >
+              <Settings className="w-4 h-4" />
+            </button>
           </div>
         </div>
       </div>
@@ -510,15 +1129,21 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
         <VoiceChannelStage
           channel={activeChannel}
           server={server}
+          currentUserId={currentUser.id}
           participants={voiceParticipants.filter((p) => p.channelId === activeChannel.id)}
           activeVoice={activeVoice}
           voiceSettings={voiceSettings}
           canConnect={canConnectVoice}
           canSpeak={canSpeakVoice}
+          localVideoStream={localVideoStream}
+          remoteVideoStreams={remoteVideoStreams}
+          streamingUserIds={streamingUserIds}
           onJoinVoice={() => onJoinVoiceChannel(server, activeChannel)}
           onLeaveVoice={onLeaveVoice}
           onToggleMute={onToggleVoiceMute}
           onToggleDeafen={onToggleVoiceDeafen}
+          onStartVoiceStream={onStartVoiceStream}
+          onStopVoiceStream={onStopVoiceStream}
           onPttHoldStart={onPttHoldStart}
           onPttHoldEnd={onPttHoldEnd}
           onSwitchInputMode={onSwitchVoiceInputMode}
@@ -526,13 +1151,23 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
           onSwitchToTextChannel={() => {
             if (textChannels[0]) setSelectedChannelId(textChannels[0].id);
           }}
-          onOpenProfile={onOpenProfile}
+          onOpenProfile={handleOpenMemberPopoverById}
         />
       ) : (
         <div className="flex-1 flex flex-col min-w-0 bg-white dark:bg-zinc-900 relative">
           {/* Channel Header */}
-          <div className="h-14 px-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3 shrink-0">
+          <div className="h-14 px-3 sm:px-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2 shrink-0">
             <div className="flex items-center gap-2 min-w-0">
+              {onOpenMobileDrawer && (
+                <button
+                  type="button"
+                  onClick={onOpenMobileDrawer}
+                  aria-label="Open channels drawer"
+                  className="lg:hidden p-1.5 -ml-1 rounded-lg text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+                >
+                  <Menu className="w-4 h-4" />
+                </button>
+              )}
               <Hash className="w-4 h-4 text-zinc-400 dark:text-zinc-500 shrink-0" />
               <span className="font-display text-sm font-bold text-zinc-950 dark:text-zinc-50 truncate">
                 {activeChannel?.name || 'general'}
@@ -541,11 +1176,11 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
                 <>
                   <span
                     aria-hidden="true"
-                    className="text-zinc-300 dark:text-zinc-700 hidden sm:inline"
+                    className="text-zinc-300 dark:text-zinc-700 hidden md:inline"
                   >
                     |
                   </span>
-                  <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate hidden sm:inline">
+                  <span className="text-xs text-zinc-500 dark:text-zinc-400 truncate hidden md:inline">
                     {activeChannel.topic}
                   </span>
                 </>
@@ -553,6 +1188,7 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
             </div>
 
             <div className="flex items-center gap-1.5 shrink-0">
+
               <button
                 type="button"
                 onClick={() =>
@@ -589,9 +1225,32 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
                 </span>
               </button>
 
-              <span className="hidden sm:inline text-xs font-mono tabular-nums text-zinc-500 dark:text-zinc-400 pl-1">
-                {members.length} members
-              </span>
+              {/* Toggle Members Button (Desktop + Mobile/Tablet Drawer) */}
+              <button
+                type="button"
+                onClick={() => {
+                  if (window.innerWidth < 1280 && setIsMobileMembersOpen) {
+                    setIsMobileMembersOpen(!isMobileMembersOpen);
+                  } else {
+                    setShowMembers((v) => !v);
+                  }
+                }}
+                title="Toggle Member List"
+                aria-label="Toggle Member List"
+                className={`px-2 py-1 rounded-lg text-xs flex items-center gap-1 border cursor-pointer ${
+                  showMembers
+                    ? 'bg-zinc-950 text-white border-zinc-950 dark:bg-white dark:text-zinc-950'
+                    : 'bg-zinc-50 dark:bg-zinc-800 text-zinc-600 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700'
+                }`}
+              >
+                {showMembers ? (
+                  <PanelRightClose className="w-3.5 h-3.5 hidden xl:block" />
+                ) : (
+                  <PanelRightOpen className="w-3.5 h-3.5 hidden xl:block" />
+                )}
+                <Users className="w-3.5 h-3.5 xl:hidden" />
+                <span className="font-mono tabular-nums text-[11px]">{members.length}</span>
+              </button>
             </div>
           </div>
 
@@ -659,7 +1318,7 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
           )}
 
           {/* Messages Feed */}
-          <div className="flex-1 overflow-y-auto p-5 space-y-2">
+          <div className="flex-1 overflow-y-auto p-3.5 sm:p-5 space-y-2">
             {loading ? (
               <p className="text-xs text-zinc-500 dark:text-zinc-400">
                 Loading channel history...
@@ -670,7 +1329,7 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
                   Welcome to #{activeChannel?.name}
                 </p>
                 <p className="text-xs text-zinc-500 dark:text-zinc-400 mt-1">
-                  Start the conversation below — share messages, images, GIFs, or voice notes.
+                  Start the conversation below — share messages, images, videos, GIFs, or voice notes.
                 </p>
               </div>
             ) : (
@@ -679,12 +1338,14 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
                   key={msg.id}
                   message={msg}
                   currentUserId={currentUser.id}
+                  isAuthorStreaming={Boolean(streamingUserIds?.has(msg.authorId))}
                   authorRoles={getMemberRoles(server, msg.authorId)}
+                  customEmojis={server.customEmojis || []}
                   canManageMessages={canManageMessages}
                   canPinMessages={canPinMessages}
                   canAddReactions={canAddReactions}
                   isUnreadStart={unreadMarkerMessageId === msg.id}
-                  onOpenProfile={onOpenProfile}
+                  onOpenProfile={handleOpenMemberPopoverById}
                   onReply={(m) => setReplyTarget(m)}
                   onForward={onForwardMessage}
                   onEdit={handleEditMessage}
@@ -718,106 +1379,129 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
             placeholder={`Message #${activeChannel?.name || 'general'}...`}
             replyTarget={replyTarget}
             onCancelReply={() => setReplyTarget(null)}
-            disabled={!canSendMessages}
-            disabledReason="Your server role does not allow sending messages in this channel."
+            disabled={!canSendMessages || isTimedOut}
+            disabledReason={
+              isTimedOut
+                ? 'You are currently timed out in this server.'
+                : 'Your server role does not allow sending messages in this channel.'
+            }
             canAttachFiles={canAttachFiles}
+            customEmojis={server.customEmojis || []}
+            onOpenManageCustomEmojis={() => {
+              setServerSettingsTab('emoji');
+              setServerSettingsOpen(true);
+            }}
             onSend={handleSendMessage}
             onError={onNotify}
           />
         </div>
       )}
 
-      {/* Right: Server Members Roster with Status & Role Badges */}
-      <aside className="hidden xl:flex w-60 bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 flex-col shrink-0">
-        <div className="h-14 px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
-          <div className="flex items-center gap-2">
-            <Users className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
-            <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
-              Members ({members.length})
-            </span>
-          </div>
-          <button
-            type="button"
-            onClick={() => setRolesModalOpen(true)}
-            title="Roles & Members"
-            className="text-[11px] font-semibold text-zinc-500 hover:text-zinc-950 dark:hover:text-white cursor-pointer"
-          >
-            Roles
-          </button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-3 space-y-2">
-          {members.map((m) => {
-            const effectiveStatus = getEffectiveStatus(m, onlineUserIds, currentUser.id);
-            const isOwner = m.id === server.ownerId;
-            const memberRoles = getMemberRoles(server, m.id);
-            const topRole = memberRoles[0];
-            return (
-              <div
-                key={m.id}
-                className="flex items-center justify-between gap-2 p-2 rounded-xl hover:bg-white dark:hover:bg-zinc-900 border border-transparent hover:border-zinc-200 dark:hover:border-zinc-800 transition-colors"
+      {/* Desktop Right: Toggleable Server Members Roster */}
+      {showMembers && (
+        <aside className="hidden xl:flex w-60 bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 flex-col shrink-0">
+          <div className="h-14 px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <Users className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
+              <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                Members ({members.length})
+              </span>
+            </div>
+            {canManageServer && (
+              <button
+                type="button"
+                onClick={() => {
+                  setServerSettingsTab('overview');
+                  setServerSettingsOpen(true);
+                }}
+                title="Server Settings"
+                className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-200/70 dark:hover:bg-zinc-800 cursor-pointer"
               >
-                <button
-                  type="button"
-                  onClick={() => onOpenProfile(m.id)}
-                  className="flex items-center gap-2.5 min-w-0 text-left cursor-pointer"
-                >
-                  <div className="relative shrink-0">
-                    <img
-                      src={m.avatarUrl}
-                      alt={m.name}
-                      referrerPolicy="no-referrer"
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = makeInitialsAvatar(m.name);
-                      }}
-                      className="w-8 h-8 rounded-full object-cover border border-zinc-200 dark:border-zinc-700"
-                    />
-                    <span className="absolute -bottom-0.5 -right-0.5">
-                      <StatusBadge status={effectiveStatus} size="sm" />
-                    </span>
-                  </div>
-                  <div className="min-w-0">
-                    <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">
-                      {m.name}
-                    </p>
-                    <p className="text-[11px] text-zinc-500 dark:text-zinc-400 truncate">
-                      {isOwner
-                        ? 'Owner'
-                        : topRole
-                        ? topRole.name
-                        : effectiveStatus === 'dnd'
-                        ? 'Do Not Disturb'
-                        : effectiveStatus.charAt(0).toUpperCase() + effectiveStatus.slice(1)}
-                    </p>
-                  </div>
-                </button>
+                <Settings className="w-3.5 h-3.5" />
+              </button>
+            )}
+          </div>
+          {renderMembersListContent()}
+        </aside>
+      )}
 
-                {m.id !== currentUser.id && (
-                  <button
-                    type="button"
-                    onClick={() => onAddFriend(m.tag)}
-                    title={`Add ${m.name} as friend`}
-                    className="p-1.5 text-zinc-400 hover:text-zinc-950 dark:hover:text-white rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer shrink-0"
-                  >
-                    <UserPlus className="w-3.5 h-3.5" />
-                  </button>
-                )}
+      {/* Mobile & Tablet Swipe-Left Slide-Over Members Drawer */}
+      {isMobileMembersOpen && (
+        <div className="xl:hidden fixed inset-0 z-50 flex justify-end">
+          <div
+            className="flex-1 bg-black/55 backdrop-blur-xs"
+            onClick={() => setIsMobileMembersOpen?.(false)}
+          />
+          <aside className="w-72 bg-zinc-50 dark:bg-zinc-950 border-l border-zinc-200 dark:border-zinc-800 flex flex-col h-full shadow-2xl">
+            <div className="h-14 px-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <Users className="w-4 h-4 text-zinc-500 dark:text-zinc-400" />
+                <span className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                  Members ({members.length})
+                </span>
               </div>
-            );
-          })}
+              <button
+                type="button"
+                onClick={() => setIsMobileMembersOpen?.(false)}
+                className="p-1.5 rounded-lg text-zinc-500 hover:text-zinc-950 dark:hover:text-white cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            {renderMembersListContent()}
+          </aside>
         </div>
-      </aside>
+      )}
 
-      {/* Server Roles & Permissions Modal */}
-      <ServerRolesModal
-        isOpen={rolesModalOpen}
+      {/* Discord-style Member Card Popover (Roles, Timeout/Kick/Ban, Message, Add Friend, Profile) */}
+      {selectedMemberCard && (
+        <MemberProfilePopover
+          member={selectedMemberCard}
+          server={server}
+          currentUser={currentUser}
+          onlineUserIds={onlineUserIds}
+          isStreaming={Boolean(
+            selectedMemberCard.isStreaming || streamingUserIds?.has(selectedMemberCard.id)
+          )}
+          isFriend={friendsData.friends.some((f) => f.id === selectedMemberCard.id)}
+          pendingDirection={popoverPendingDirection}
+          onClose={() => setSelectedMemberCard(null)}
+          onViewFullProfile={(uid) => {
+            setSelectedMemberCard(null);
+            onOpenProfile(uid);
+          }}
+          onMessageUser={(uid) => {
+            setSelectedMemberCard(null);
+            onStartDm(uid);
+          }}
+          onAddFriend={onAddFriend}
+          onServerUpdated={onServerUpdated}
+          onError={onNotify}
+        />
+      )}
+
+      {/* Full Server Settings Modal */}
+      <ServerSettingsModal
+        isOpen={serverSettingsOpen}
+        initialTab={serverSettingsTab}
         server={server}
         members={members}
-        currentUserId={currentUser.id}
-        onClose={() => setRolesModalOpen(false)}
+        currentUser={currentUser}
+        onClose={() => setServerSettingsOpen(false)}
         onServerUpdated={onServerUpdated}
-        onNotify={onNotify}
+      />
+
+      {/* Invite Links Modal */}
+      <InviteModal
+        isOpen={inviteModalOpen}
+        server={server}
+        friends={friendsData.friends}
+        currentUserId={currentUser.id}
+        onClose={() => setInviteModalOpen(false)}
+        onServerUpdated={onServerUpdated}
+        onSendInviteDm={onSendInviteDm}
       />
     </div>
   );
 };
+

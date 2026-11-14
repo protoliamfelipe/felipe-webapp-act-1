@@ -60,9 +60,5 @@ export function makeInitialsAvatar(name: string): string {
 }
 
 export function getServerMonogram(name: string): string {
-  const words = (name || 'S').trim().split(/\s+/);
-  if (words.length >= 2) {
-    return `${words[0][0]}${words[1][0]}`.toUpperCase();
-  }
-  return name.slice(0, 2).toUpperCase();
+  return (name || 'S').trim().charAt(0).toUpperCase() || 'S';
 }

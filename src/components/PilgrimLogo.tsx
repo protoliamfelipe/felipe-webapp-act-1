@@ -1,43 +1,57 @@
-import React, { useState } from 'react';
+import React from 'react';
 
 interface PilgrimLogoProps {
   className?: string;
   invertOnDark?: boolean;
 }
 
-const PILGRIM_LOGO_URL = '/assets/pilgrim-logo.webp';
+/**
+ * Pilgrim official geometric emblem matching Pilgrim Image.png:
+ * Angular twin-peak chevron crest tapering to twin downward blades with a central visor cutout.
+ */
+const PILGRIM_EMBLEM_PATH =
+  // Outer silhouette
+  'M50 18.2 L75.4 43.8 L53.6 81.5 L53.6 62.2 L57.4 55.3 L50 48.0 L42.6 55.3 L46.4 62.2 L46.4 81.5 L24.6 43.8 Z ' +
+  // Inner upper chevron cutout (evenodd negative space)
+  'M50 29.5 L35.8 43.7 L38.6 48.5 L50 37.1 L61.4 48.5 L64.2 43.7 Z';
 
-export const PilgrimLogo: React.FC<PilgrimLogoProps> = ({ className = 'w-8 h-8', invertOnDark = false }) => {
-  const [failed, setFailed] = useState(false);
-
-  if (!failed) {
+export const PilgrimLogo: React.FC<PilgrimLogoProps> = ({
+  className = 'w-8 h-8',
+  invertOnDark = false,
+}) => {
+  if (invertOnDark) {
     return (
-      <img
-        src={PILGRIM_LOGO_URL}
-        alt="Pilgrim Emblem"
-        onError={() => setFailed(true)}
-        className={`${className} object-contain shrink-0 ${invertOnDark ? 'mix-blend-screen' : 'brightness-0 invert mix-blend-multiply'}`}
-      />
+      <svg
+        viewBox="0 0 100 100"
+        className={`${className} shrink-0`}
+        fill="none"
+        xmlns="http://www.w3.org/2000/svg"
+        aria-label="Pilgrim Emblem"
+      >
+        <path
+          d={PILGRIM_EMBLEM_PATH}
+          fill="#FFFFFF"
+          fillRule="evenodd"
+          clipRule="evenodd"
+        />
+      </svg>
     );
   }
 
   return (
     <svg
-      viewBox="0 0 64 64"
+      viewBox="0 0 100 100"
       className={`${className} shrink-0`}
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
       aria-label="Pilgrim Emblem"
     >
+      <rect width="100" height="100" rx="22" fill="#09090B" />
       <path
-        d="M32 8L50 20L43 48L32 56L21 48L14 20L32 8Z"
-        stroke={invertOnDark ? '#FFFFFF' : '#09090B'}
-        strokeWidth="3.5"
-        strokeLinejoin="round"
-      />
-      <path
-        d="M22 25L32 17L42 25L32 43L22 25Z"
-        fill={invertOnDark ? '#E4E4E7' : '#27272A'}
+        d={PILGRIM_EMBLEM_PATH}
+        fill="#FFFFFF"
+        fillRule="evenodd"
+        clipRule="evenodd"
       />
     </svg>
   );

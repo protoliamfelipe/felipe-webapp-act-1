@@ -1,4 +1,4 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useMemo } from 'react';
 import {
   Plus,
   Send,
@@ -8,10 +8,11 @@ import {
   X,
   Reply,
   Image as ImageIcon,
+  Film,
 } from 'lucide-react';
-import { ChatMessage } from '../types';
-
-const COMPOSER_EMOJIS = ['😀', '😂', '🔥', '❤️', '👍', '🎮', '👏', '✨', '😎', '👀', '💯', '🚀'];
+import { ChatMessage, CustomEmoji } from '../types';
+import { EmojiPicker } from './EmojiPicker';
+import { GifPicker } from './GifPicker';
 
 interface ChatComposerProps {
   placeholder: string;
@@ -20,6 +21,8 @@ interface ChatComposerProps {
   disabled?: boolean;
   disabledReason?: string;
   canAttachFiles?: boolean;
+  customEmojis?: CustomEmoji[];
+  onOpenManageCustomEmojis?: () => void;
   onSend: (payload: {
     content: string;
     attachmentFile?: File | null;
@@ -29,6 +32,20 @@ interface ChatComposerProps {
   onError: (msg: string) => void;
 }
 
+function isVideoFile(file: File): boolean {
+  return (
+    file.type.startsWith('video/') ||
+    /\.(mp4|webm|mov|m4v|ogv|mkv)$/i.test(file.name)
+  );
+}
+
+function isAudioFile(file: File): boolean {
+  return (
+    file.type.startsWith('audio/') ||
+    /\.(mp3|wav|ogg|m4a|flac|aac)$/i.test(file.name)
+  );
+}
+
 export const ChatComposer: React.FC<ChatComposerProps> = ({
   placeholder,
   replyTarget,
@@ -36,6 +53,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   disabled = false,
   disabledReason,
   canAttachFiles = true,
+  customEmojis = [],
+  onOpenManageCustomEmojis,
   onSend,
   onError,
 }) => {
@@ -43,6 +62,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const [pendingFile, setPendingFile] = useState<File | null>(null);
   const [pendingPreview, setPendingPreview] = useState<string | null>(null);
   const [emojiOpen, setEmojiOpen] = useState(false);
+  const [gifOpen, setGifOpen] = useState(false);
   const [sending, setSending] = useState(false);
 
   // Voice message recording state
@@ -55,7 +75,8 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   const recordStartRef = useRef<number>(0);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
-  const gifInputRef = useRef<HTMLInputElement>(null);
+  const composerRef = useRef<HTMLDivElement>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     return () => {
@@ -65,6 +86,25 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       }
     };
   }, []);
+
+  useEffect(() => {
+    const handleOutside = (e: MouseEvent) => {
+      if (composerRef.current && !composerRef.current.contains(e.target as Node)) {
+        setEmojiOpen(false);
+        setGifOpen(false);
+      }
+    };
+    if (emojiOpen || gifOpen) {
+      document.addEventListener('mousedown', handleOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [emojiOpen, gifOpen]);
+
+  const setSelectedAttachment = (file: File) => {
+    if (pendingPreview) URL.revokeObjectURL(pendingPreview);
+    setPendingFile(file);
+    setPendingPreview(URL.createObjectURL(file));
+  };
 
   const clearPendingFile = () => {
     setPendingFile(null);
@@ -76,9 +116,60 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     const f = e.target.files?.[0];
     if (!f) return;
     e.target.value = '';
-    if (pendingPreview) URL.revokeObjectURL(pendingPreview);
-    setPendingFile(f);
-    setPendingPreview(URL.createObjectURL(f));
+    setSelectedAttachment(f);
+  };
+
+  const handlePaste = (e: React.ClipboardEvent<HTMLInputElement>) => {
+    if (!canAttachFiles) return;
+    const files = e.clipboardData?.files;
+    if (files && files.length > 0) {
+      const f = files[0];
+      setSelectedAttachment(f);
+      e.preventDefault();
+      return;
+    }
+
+    // Also inspect clipboardData.items (handles copied browser images & OS screenshots reliably)
+    const items = e.clipboardData?.items;
+    if (items) {
+      for (let i = 0; i < items.length; i++) {
+        const item = items[i];
+        if (item.kind === 'file') {
+          const blobFile = item.getAsFile();
+          if (blobFile) {
+            const ext = blobFile.type.split('/')[1] || 'png';
+            const normalized =
+              blobFile.name && blobFile.name !== 'image.png'
+                ? blobFile
+                : new File([blobFile], `pasted_${Date.now()}.${ext}`, {
+                    type: blobFile.type || 'image/png',
+                  });
+            setSelectedAttachment(normalized);
+            e.preventDefault();
+            return;
+          }
+        }
+      }
+    }
+  };
+
+  // :shortcode: autocomplete matching while typing
+  const shortcodeSuggestions = useMemo(() => {
+    if (customEmojis.length === 0) return [];
+    const match = /(?:^|\s):([a-zA-Z0-9_]{1,})$/.exec(draft);
+    if (!match) return [];
+    const term = match[1].toLowerCase();
+    return customEmojis.filter((ce) => ce.name.toLowerCase().includes(term)).slice(0, 8);
+  }, [draft, customEmojis]);
+
+  const insertCustomEmojiShortcode = (name: string) => {
+    setDraft((prev) => {
+      if (/(?:^|\s):([a-zA-Z0-9_]{1,})$/.test(prev)) {
+        return prev.replace(/(^|\s):[a-zA-Z0-9_]{1,}$/, `$1:${name}: `);
+      }
+      return `${prev}${prev && !prev.endsWith(' ') ? ' ' : ''}:${name}: `;
+    });
+    inputRef.current?.focus();
   };
 
   const handleSendSubmit = async (e: React.FormEvent) => {
@@ -97,6 +188,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       clearPendingFile();
       onCancelReply();
       setEmojiOpen(false);
+      setGifOpen(false);
     } catch (err: any) {
       onError(err?.message || 'Failed to send message.');
     } finally {
@@ -204,7 +296,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
   if (disabled) {
     return (
-      <div className="p-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-950/60">
+      <div className="p-3 sm:p-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-950/60">
         <div className="px-4 py-2.5 rounded-xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs text-zinc-500 dark:text-zinc-400">
           {disabledReason || 'You do not have permission to send messages here.'}
         </div>
@@ -213,7 +305,10 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
   }
 
   return (
-    <div className="p-3 sm:p-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-950/60 space-y-2 relative">
+    <div
+      ref={composerRef}
+      className="p-2.5 sm:p-4 border-t border-zinc-200 dark:border-zinc-800 bg-zinc-50/70 dark:bg-zinc-950/60 space-y-2 relative"
+    >
       {/* Reply Target Banner */}
       {replyTarget && (
         <div className="flex items-center justify-between gap-2 px-3 py-1.5 rounded-xl bg-zinc-100 dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 text-xs">
@@ -234,19 +329,36 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         </div>
       )}
 
-      {/* Pending Image / GIF Preview */}
+      {/* Pending Image / Video / GIF / Audio Preview */}
       {pendingPreview && pendingFile && (
         <div className="flex items-center gap-3 p-2 rounded-xl bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 w-fit max-w-full">
-          <img
-            src={pendingPreview}
-            alt="Upload preview"
-            className="w-16 h-16 rounded-lg object-cover border border-zinc-200 dark:border-zinc-700"
-          />
+          {isVideoFile(pendingFile) ? (
+            <video
+              src={pendingPreview}
+              controls
+              muted
+              playsInline
+              className="w-28 h-20 rounded-lg object-cover bg-black border border-zinc-200 dark:border-zinc-700"
+            />
+          ) : isAudioFile(pendingFile) ? (
+            <div className="w-16 h-16 rounded-lg bg-zinc-100 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 flex items-center justify-center text-zinc-600 dark:text-zinc-300">
+              <Mic className="w-5 h-5" />
+            </div>
+          ) : (
+            <img
+              src={pendingPreview}
+              alt="Upload preview"
+              className="w-16 h-16 rounded-lg object-cover border border-zinc-200 dark:border-zinc-700"
+            />
+          )}
           <div className="min-w-0 max-w-[200px]">
             <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100 truncate">
               {pendingFile.name}
             </p>
-            <p className="text-[11px] text-zinc-500 dark:text-zinc-400">Ready to send</p>
+            <p className="text-[11px] text-zinc-500 dark:text-zinc-400 flex items-center gap-1">
+              {isVideoFile(pendingFile) && <Film className="w-3 h-3" />}
+              <span>Ready to send</span>
+            </p>
           </div>
           <button
             type="button"
@@ -259,36 +371,52 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
         </div>
       )}
 
-      {/* Emoji Quick Picker */}
-      {emojiOpen && (
-        <div className="absolute bottom-16 right-4 z-30 bg-zinc-950 border border-zinc-800 rounded-xl p-2 shadow-2xl grid grid-cols-6 gap-1">
-          {COMPOSER_EMOJIS.map((em) => (
+      {/* :shortcode: Autocomplete Bar */}
+      {shortcodeSuggestions.length > 0 && (
+        <div className="absolute bottom-full left-3 right-3 mb-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl shadow-xl p-1.5 z-30 flex items-center gap-1 overflow-x-auto">
+          {shortcodeSuggestions.map((ce) => (
             <button
-              key={em}
+              key={ce.id}
               type="button"
-              onClick={() => {
-                setDraft((prev) => prev + em);
-                setEmojiOpen(false);
-              }}
-              className="w-8 h-8 rounded-lg hover:bg-zinc-800 flex items-center justify-center text-base cursor-pointer"
+              onClick={() => insertCustomEmojiShortcode(ce.name)}
+              className="px-2.5 py-1.5 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 flex items-center gap-1.5 shrink-0 cursor-pointer"
             >
-              {em}
+              <img src={ce.url} alt={ce.name} className="w-5 h-5 object-contain" />
+              <span className="text-xs font-mono text-zinc-800 dark:text-zinc-200">
+                :{ce.name}:
+              </span>
             </button>
           ))}
+        </div>
+      )}
+
+      {/* Searchable Full Emoji Picker Popover */}
+      {emojiOpen && (
+        <div className="absolute bottom-full right-3 mb-2 z-40">
+          <EmojiPicker
+            customEmojis={customEmojis}
+            onSelectEmoji={(char) => setDraft((prev) => prev + char)}
+            onSelectCustomEmoji={(ce) => insertCustomEmojiShortcode(ce.name)}
+            onManageCustomEmojis={onOpenManageCustomEmojis}
+            onClose={() => setEmojiOpen(false)}
+          />
+        </div>
+      )}
+
+      {/* Searchable GIF Picker Popover */}
+      {gifOpen && (
+        <div className="absolute bottom-full right-3 mb-2 z-40">
+          <GifPicker
+            onSelectGif={(file) => setSelectedAttachment(file)}
+            onClose={() => setGifOpen(false)}
+          />
         </div>
       )}
 
       <input
         ref={fileInputRef}
         type="file"
-        accept="image/*,image/gif"
-        onChange={handleFilePick}
-        className="hidden"
-      />
-      <input
-        ref={gifInputRef}
-        type="file"
-        accept="image/gif,image/*"
+        accept="image/*,video/*,audio/*,image/gif"
         onChange={handleFilePick}
         className="hidden"
       />
@@ -323,23 +451,25 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
       ) : (
         <form
           onSubmit={handleSendSubmit}
-          className="flex items-center gap-1.5 px-2 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl focus-within:border-zinc-900 dark:focus-within:border-zinc-500 transition-colors"
+          className="flex items-center gap-1 sm:gap-1.5 px-2 py-1.5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-xl focus-within:border-zinc-900 dark:focus-within:border-zinc-500 transition-colors"
         >
           {canAttachFiles && (
             <button
               type="button"
               onClick={() => fileInputRef.current?.click()}
-              title="Upload image or GIF"
-              className="w-8 h-8 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
+              title="Upload image, video, or GIF"
+              className="w-9 h-9 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
             >
               <Plus className="w-4 h-4" />
             </button>
           )}
 
           <input
+            ref={inputRef}
             type="text"
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
+            onPaste={handlePaste}
             placeholder={placeholder}
             className="flex-1 min-w-0 px-2 py-1.5 bg-transparent text-sm text-zinc-900 dark:text-zinc-100 placeholder:text-zinc-400 dark:placeholder:text-zinc-500 focus:outline-none"
           />
@@ -349,16 +479,23 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               <button
                 type="button"
                 onClick={() => fileInputRef.current?.click()}
-                title="Attach Image"
+                title="Attach Image or Video"
                 className="hidden sm:flex w-8 h-8 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white items-center justify-center shrink-0 cursor-pointer"
               >
                 <ImageIcon className="w-4 h-4" />
               </button>
               <button
                 type="button"
-                onClick={() => gifInputRef.current?.click()}
-                title="Send GIF"
-                className="px-2 h-7 rounded-md bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-[10px] font-extrabold tracking-tight text-zinc-700 dark:text-zinc-200 shrink-0 cursor-pointer"
+                onClick={() => {
+                  setGifOpen((v) => !v);
+                  setEmojiOpen(false);
+                }}
+                title="Browse GIFs"
+                className={`px-2 h-8 rounded-md text-[10px] font-extrabold tracking-tight shrink-0 cursor-pointer transition-colors ${
+                  gifOpen
+                    ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950'
+                    : 'bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-700 dark:text-zinc-200'
+                }`}
               >
                 GIF
               </button>
@@ -367,9 +504,16 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
 
           <button
             type="button"
-            onClick={() => setEmojiOpen((v) => !v)}
-            title="Emoji"
-            className="w-8 h-8 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
+            onClick={() => {
+              setEmojiOpen((v) => !v);
+              setGifOpen(false);
+            }}
+            title="Emoji & Custom Server Emojis"
+            className={`w-9 h-9 rounded-lg flex items-center justify-center shrink-0 cursor-pointer transition-colors ${
+              emojiOpen
+                ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950'
+                : 'hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white'
+            }`}
           >
             <Smile className="w-4 h-4" />
           </button>
@@ -379,7 +523,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
               type="button"
               onClick={startVoiceRecording}
               title="Record Voice Message"
-              className="w-8 h-8 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
+              className="w-9 h-9 rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 text-zinc-500 dark:text-zinc-400 hover:text-zinc-950 dark:hover:text-white flex items-center justify-center shrink-0 cursor-pointer"
             >
               <Mic className="w-4 h-4" />
             </button>
@@ -388,7 +532,7 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
           <button
             type="submit"
             disabled={sending || (!draft.trim() && !pendingFile)}
-            className="py-1.5 px-3 bg-zinc-950 hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 disabled:opacity-35 text-white dark:text-zinc-950 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors cursor-pointer shrink-0"
+            className="min-h-[36px] py-1.5 px-3 bg-zinc-950 hover:bg-zinc-800 dark:bg-white dark:hover:bg-zinc-200 disabled:opacity-35 text-white dark:text-zinc-950 text-xs font-semibold rounded-lg flex items-center gap-1 transition-colors cursor-pointer shrink-0"
           >
             <Send className="w-3.5 h-3.5" />
             <span className="hidden sm:inline">Send</span>
@@ -398,3 +542,4 @@ export const ChatComposer: React.FC<ChatComposerProps> = ({
     </div>
   );
 };
+

@@ -4,7 +4,10 @@ import {
   Server,
   ServerRole,
   RolePermissions,
+  ChannelCategory,
   Channel,
+  CustomEmoji,
+  ServerInvite,
   ChatMessage,
   VoiceParticipant,
   Post,
@@ -12,8 +15,10 @@ import {
   FriendsOverview,
   ReportRecord,
   Visibility,
+  GifItem,
 } from '../types';
 import { localFallback } from './localFallback';
+import { searchBuiltInGifs } from '../utils/gifLibrary';
 
 const TOKEN_KEY = 'pilgrim_auth_token';
 const USER_KEY = 'pilgrim_auth_user';
@@ -52,17 +57,21 @@ class BackendUnavailableError extends Error {
   }
 }
 
-async function request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
+async function request<T>(
+  endpoint: string,
+  options: RequestInit & { skipLocalTokenCheck?: boolean } = {}
+): Promise<T> {
+  const { skipLocalTokenCheck, ...fetchOptions } = options;
   const token = getStoredToken();
-  if (token?.startsWith('local_token:')) {
+  if (!skipLocalTokenCheck && token?.startsWith('local_token:')) {
     throw new BackendUnavailableError('Using local session store.');
   }
 
   const headers: Record<string, string> = {
-    ...(options.headers as Record<string, string>),
+    ...(fetchOptions.headers as Record<string, string>),
   };
 
-  if (token) {
+  if (token && !skipLocalTokenCheck) {
     headers['Authorization'] = `Bearer ${token}`;
   }
 
@@ -72,7 +81,7 @@ async function request<T>(endpoint: string, options: RequestInit = {}): Promise<
 
   let res: Response;
   try {
-    res = await fetch(endpoint, { ...options, headers });
+    res = await fetch(endpoint, { ...fetchOptions, headers });
   } catch {
     throw new BackendUnavailableError('Backend server is unreachable.');
   }
@@ -146,6 +155,7 @@ export const api = {
         request<{ token: string; user: User; isNewSignup?: boolean }>('/api/auth/register', {
           method: 'POST',
           body: fd,
+          skipLocalTokenCheck: true,
         }),
       () => localFallback.register(data)
     );
@@ -160,6 +170,7 @@ export const api = {
         request<{ token: string; user: User }>('/api/auth/login', {
           method: 'POST',
           body: JSON.stringify(data),
+          skipLocalTokenCheck: true,
         }),
       () => localFallback.login(data)
     );
@@ -173,13 +184,12 @@ export const api = {
       () =>
         request<{
           sent: boolean;
-          deliveryMode: 'email' | 'preview';
-          previewCode?: string;
-          magicToken?: string;
+          deliveryMode: 'email';
           expiresInSeconds: number;
         }>('/api/auth/email/request-code', {
           method: 'POST',
           body: JSON.stringify({ email }),
+          skipLocalTokenCheck: true,
         }),
       () => localFallback.requestEmailLoginCode(email)
     );
@@ -191,6 +201,7 @@ export const api = {
         request<{ token: string; user: User }>('/api/auth/email/verify-code', {
           method: 'POST',
           body: JSON.stringify(data),
+          skipLocalTokenCheck: true,
         }),
       () => localFallback.verifyEmailLoginCode(data)
     );
@@ -223,6 +234,20 @@ export const api = {
           body: JSON.stringify({ status }),
         }),
       () => localFallback.updateStatus(token, status)
+    );
+    setStoredUser(res.user);
+    return res;
+  },
+
+  async updateStreamStatus(isStreaming: boolean, streamTitle?: string) {
+    const token = getStoredToken();
+    const res = await withFallback(
+      () =>
+        request<{ user: User }>('/api/users/me/stream', {
+          method: 'PATCH',
+          body: JSON.stringify({ isStreaming, streamTitle }),
+        }),
+      () => localFallback.updateStreamStatus(token, isStreaming, streamTitle)
     );
     setStoredUser(res.user);
     return res;
@@ -303,7 +328,7 @@ export const api = {
   async createServer(data: {
     name: string;
     description: string;
-    category: string;
+    category?: string;
     iconStyle?: string;
     iconFile?: File | null;
   }) {
@@ -311,7 +336,7 @@ export const api = {
     const fd = new FormData();
     fd.append('name', data.name);
     fd.append('description', data.description);
-    fd.append('category', data.category);
+    if (data.category) fd.append('category', data.category);
     if (data.iconStyle) fd.append('iconStyle', data.iconStyle);
     if (data.iconFile) fd.append('icon', data.iconFile);
 
@@ -322,6 +347,41 @@ export const api = {
           body: fd,
         }),
       () => localFallback.createServer(token, data)
+    );
+  },
+
+  async updateServer(
+    serverId: string,
+    data: {
+      name?: string;
+      description?: string;
+      iconStyle?: string;
+      iconFile?: File | null;
+      bannerFile?: File | null;
+      removeIcon?: boolean;
+      removeBanner?: boolean;
+    }
+  ) {
+    const token = getStoredToken();
+    const fd = new FormData();
+    if (data.name !== undefined) fd.append('name', data.name);
+    if (data.description !== undefined) fd.append('description', data.description);
+    if (data.iconStyle !== undefined) fd.append('iconStyle', data.iconStyle);
+    if (data.iconFile) fd.append('icon', data.iconFile);
+    if (data.bannerFile) fd.append('banner', data.bannerFile);
+    if (data.removeIcon) fd.append('removeIcon', 'true');
+    if (data.removeBanner) fd.append('removeBanner', 'true');
+
+    return withFallback(
+      () =>
+        request<{ server: Server & { isMember: boolean; memberCount: number } }>(
+          `/api/servers/${serverId}`,
+          {
+            method: 'PATCH',
+            body: fd,
+          }
+        ),
+      () => localFallback.updateServer(token, serverId, data)
     );
   },
 
@@ -337,9 +397,54 @@ export const api = {
     );
   },
 
+  async createCategory(serverId: string, name: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ category: ChannelCategory; server: Server }>(
+          `/api/servers/${serverId}/categories`,
+          {
+            method: 'POST',
+            body: JSON.stringify({ name }),
+          }
+        ),
+      () => localFallback.createCategory(token, serverId, name)
+    );
+  },
+
+  async updateCategory(
+    serverId: string,
+    catId: string,
+    data: { name?: string; collapsed?: boolean }
+  ) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ category: ChannelCategory; server: Server }>(
+          `/api/servers/${serverId}/categories/${catId}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify(data),
+          }
+        ),
+      () => localFallback.updateCategory(token, serverId, catId, data)
+    );
+  },
+
+  async deleteCategory(serverId: string, catId: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server }>(`/api/servers/${serverId}/categories/${catId}`, {
+          method: 'DELETE',
+        }),
+      () => localFallback.deleteCategory(token, serverId, catId)
+    );
+  },
+
   async createChannel(
     serverId: string,
-    data: { name: string; topic?: string; type?: 'text' | 'voice' }
+    data: { name: string; topic?: string; type?: 'text' | 'voice'; categoryId?: string }
   ) {
     const token = getStoredToken();
     return withFallback(
@@ -349,6 +454,132 @@ export const api = {
           body: JSON.stringify(data),
         }),
       () => localFallback.createChannel(token, serverId, data)
+    );
+  },
+
+  async updateChannel(
+    serverId: string,
+    channelId: string,
+    data: { name?: string; topic?: string; categoryId?: string | null }
+  ) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ channel: Channel; server: Server }>(
+          `/api/servers/${serverId}/channels/${channelId}`,
+          {
+            method: 'PATCH',
+            body: JSON.stringify(data),
+          }
+        ),
+      () => localFallback.updateChannel(token, serverId, channelId, data)
+    );
+  },
+
+  async deleteChannel(serverId: string, channelId: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server }>(`/api/servers/${serverId}/channels/${channelId}`, {
+          method: 'DELETE',
+        }),
+      () => localFallback.deleteChannel(token, serverId, channelId)
+    );
+  },
+
+  async uploadServerEmoji(
+    serverId: string,
+    data: { name: string; file: File; animated: boolean }
+  ) {
+    const token = getStoredToken();
+    const fd = new FormData();
+    fd.append('name', data.name);
+    fd.append('animated', String(data.animated));
+    fd.append('emoji', data.file);
+
+    return withFallback(
+      () =>
+        request<{ emoji: CustomEmoji; server: Server }>(`/api/servers/${serverId}/emojis`, {
+          method: 'POST',
+          body: fd,
+        }),
+      () => localFallback.uploadServerEmoji(token, serverId, data)
+    );
+  },
+
+  async deleteServerEmoji(serverId: string, emojiId: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server }>(`/api/servers/${serverId}/emojis/${emojiId}`, {
+          method: 'DELETE',
+        }),
+      () => localFallback.deleteServerEmoji(token, serverId, emojiId)
+    );
+  },
+
+  async createInvite(serverId: string, options?: { maxUses?: number; maxAgeHours?: number }) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ invite: ServerInvite; server: Server }>(`/api/servers/${serverId}/invites`, {
+          method: 'POST',
+          body: JSON.stringify(options || {}),
+        }),
+      () => localFallback.createInvite(token, serverId, options)
+    );
+  },
+
+  async deleteInvite(serverId: string, code: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server }>(`/api/servers/${serverId}/invites/${encodeURIComponent(code)}`, {
+          method: 'DELETE',
+        }),
+      () => localFallback.deleteInvite(token, serverId, code)
+    );
+  },
+
+  async getInvitePreview(code: string) {
+    return withFallback(
+      () =>
+        request<{
+          invite: ServerInvite;
+          server: {
+            id: string;
+            name: string;
+            description: string;
+            iconUrl?: string;
+            bannerUrl?: string;
+            iconStyle?: string;
+            memberCount: number;
+          };
+        }>(`/api/invites/${encodeURIComponent(code)}`),
+      () => localFallback.getInvitePreview(code)
+    );
+  },
+
+  async joinByInvite(code: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server & { isMember: boolean; memberCount: number } }>(
+          `/api/invites/${encodeURIComponent(code)}/join`,
+          { method: 'POST' }
+        ),
+      () => localFallback.joinByInvite(token, code)
+    );
+  },
+
+  async searchGifs(query = '', category = 'All') {
+    const qs = new URLSearchParams();
+    if (query.trim()) qs.set('q', query.trim());
+    if (category && category !== 'All') qs.set('category', category);
+    const queryStr = qs.toString() ? `?${qs.toString()}` : '';
+    return withFallback(
+      () => request<{ gifs: GifItem[] }>(`/api/gifs${queryStr}`),
+      async () => ({ gifs: searchBuiltInGifs(query, category, false) })
     );
   },
 
@@ -409,6 +640,40 @@ export const api = {
     );
   },
 
+  async timeoutMember(serverId: string, userId: string, minutes: number) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server }>(`/api/servers/${serverId}/members/${userId}/timeout`, {
+          method: 'POST',
+          body: JSON.stringify({ minutes }),
+        }),
+      () => localFallback.timeoutMember(token, serverId, userId, minutes)
+    );
+  },
+
+  async banMember(serverId: string, userId: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server }>(`/api/servers/${serverId}/members/${userId}/ban`, {
+          method: 'POST',
+        }),
+      () => localFallback.banMember(token, serverId, userId)
+    );
+  },
+
+  async unbanMember(serverId: string, userId: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ server: Server }>(`/api/servers/${serverId}/bans/${userId}`, {
+          method: 'DELETE',
+        }),
+      () => localFallback.unbanMember(token, serverId, userId)
+    );
+  },
+
   async kickMember(serverId: string, userId: string) {
     const token = getStoredToken();
     return withFallback(
@@ -423,7 +688,7 @@ export const api = {
   async getVoiceParticipants(serverId: string) {
     return withFallback(
       () => request<{ participants: VoiceParticipant[] }>(`/api/servers/${serverId}/voice`),
-      async () => ({ participants: [] as VoiceParticipant[] })
+      () => localFallback.getVoiceParticipants(serverId)
     );
   },
 

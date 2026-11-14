@@ -1,6 +1,17 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
-import { CheckCircle2, Plus, Video, Image as ImageIcon, MessageSquare } from 'lucide-react';
+import {
+  CheckCircle2,
+  Plus,
+  Video,
+  Image as ImageIcon,
+  MessageSquare,
+  Home,
+  Flame,
+  Compass,
+  Users,
+  Settings,
+} from 'lucide-react';
 import {
   User,
   UserStatus,
@@ -13,10 +24,23 @@ import {
   UserPreferences,
   VoiceParticipant,
   VoiceSettings,
+  AppNotification,
 } from './types';
 import { api, getStoredToken, clearStoredAuth } from './services/api';
+import { localFallback } from './services/localFallback';
 import { makeInitialsAvatar } from './utils/avatars';
 import { hasServerPermission } from './utils/permissions';
+import {
+  playVcJoinSound,
+  playVcLeaveSound,
+  playVcMuteSound,
+  playVcUnmuteSound,
+  playVcDeafenSound,
+  playVcUndeafenSound,
+  playVcPeerJoinSound,
+  playVcPeerLeaveSound,
+  playNotificationChime,
+} from './utils/sounds';
 import { AuthScreen } from './components/AuthScreen';
 import { Sidebar, AppView, ActiveVoiceInfo } from './components/Sidebar';
 import { TopBar } from './components/TopBar';
@@ -32,6 +56,8 @@ import { SharePostModal } from './components/SharePostModal';
 import { ForwardMessageModal } from './components/ForwardMessageModal';
 import { SafetyView } from './components/SafetyView';
 import { SettingsView } from './components/SettingsView';
+import { DiscoverServersView } from './components/DiscoverServersView';
+import { LiveStreamModal } from './components/LiveStreamModal';
 
 const PREFERENCES_STORAGE_KEY = 'pilgrim_user_preferences';
 
@@ -82,30 +108,6 @@ function loadStoredPreferences(): UserPreferences {
   }
 }
 
-function playNotificationChime() {
-  try {
-    const Ctx =
-      window.AudioContext ||
-      (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
-    if (!Ctx) return;
-    const ctx = new Ctx();
-    const osc = ctx.createOscillator();
-    const gain = ctx.createGain();
-    osc.type = 'sine';
-    osc.frequency.setValueAtTime(660, ctx.currentTime);
-    osc.frequency.exponentialRampToValueAtTime(880, ctx.currentTime + 0.08);
-    gain.gain.setValueAtTime(0.05, ctx.currentTime);
-    gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.18);
-    osc.connect(gain);
-    gain.connect(ctx.destination);
-    osc.start();
-    osc.stop(ctx.currentTime + 0.19);
-    setTimeout(() => ctx.close().catch(() => {}), 300);
-  } catch {
-    // Ignore autoplay restriction errors
-  }
-}
-
 export default function App() {
   const [user, setUser] = useState<User | null>(null);
   const [isNewSignup, setIsNewSignup] = useState(false);
@@ -116,11 +118,13 @@ export default function App() {
   const [activeView, setActiveView] = useState<AppView>('startup');
   const [settingsFocusSection, setSettingsFocusSection] = useState<'appearance' | 'voice'>('appearance');
   const [isMobileSidebarOpen, setIsMobileSidebarOpen] = useState(false);
+  const [isMobileMembersOpen, setIsMobileMembersOpen] = useState(false);
 
   // Servers & Chat
   const [servers, setServers] = useState<Array<Server & { isMember: boolean; memberCount: number }>>([]);
   const [serverSearch, setServerSearch] = useState('');
   const [selectedServerId, setSelectedServerId] = useState<string | null>(null);
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(null);
   const [onlineUserIds, setOnlineUserIds] = useState<string[]>([]);
   const [incomingWsMessage, setIncomingWsMessage] = useState<ChatMessage | null>(null);
   const [incomingWsUpdatedMessage, setIncomingWsUpdatedMessage] = useState<ChatMessage | null>(null);
@@ -143,7 +147,7 @@ export default function App() {
   } | null>(null);
   const [profilePosts, setProfilePosts] = useState<Post[]>([]);
 
-  // Friends & DMs
+  // Friends, DMs & Live Notifications
   const [friendsData, setFriendsData] = useState<FriendsOverview & { discoverPlayers: User[] }>({
     friends: [],
     incomingRequests: [],
@@ -151,14 +155,41 @@ export default function App() {
     discoverPlayers: [],
   });
   const [activeDmFriendId, setActiveDmFriendId] = useState<string | null>(null);
+  const [unreadDmByFriendId, setUnreadDmByFriendId] = useState<Record<string, number>>({});
+  const [dmPopupFriendIds, setDmPopupFriendIds] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
-  // Modals & Notifications
+  // Modals & Invite Handling
   const [isComposerOpen, setIsComposerOpen] = useState(false);
   const [isNewServerOpen, setIsNewServerOpen] = useState(false);
+  const [pendingInviteCode, setPendingInviteCode] = useState<string>(() => {
+    try {
+      const params = new URLSearchParams(window.location.search);
+      return (params.get('invite') || '').trim();
+    } catch {
+      return '';
+    }
+  });
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [sharePostTarget, setSharePostTarget] = useState<Post | null>(null);
   const [forwardMessageTarget, setForwardMessageTarget] = useState<ChatMessage | null>(null);
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  // Live Streaming State
+  const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
+  const [remoteVideoStreams, setRemoteVideoStreams] = useState<Record<string, MediaStream>>({});
+  const [streamingUsersMap, setStreamingUsersMap] = useState<Record<string, { isStreaming: boolean; streamTitle?: string }>>({});
+  const [liveModalConfig, setLiveModalConfig] = useState<{
+    isOpen: boolean;
+    defaultSource: 'camera' | 'screen';
+    contextLabel: string;
+    allowFeedAnnouncement: boolean;
+  }>({
+    isOpen: false,
+    defaultSource: 'camera',
+    contextLabel: 'Profile Live Stream',
+    allowFeedAnnouncement: true,
+  });
 
   // Live Refs for WS, Voice Engine, and Notification rules
   const wsRef = useRef<WebSocket | null>(null);
@@ -166,17 +197,29 @@ export default function App() {
   const preferencesRef = useRef<UserPreferences>(preferences);
   const activeVoiceRef = useRef<ActiveVoiceInfo | null>(activeVoice);
   const serversRef = useRef(servers);
+  const activeViewRef = useRef<AppView>(activeView);
+  const activeDmFriendIdRef = useRef<string | null>(activeDmFriendId);
+  const selectedServerIdRef = useRef<string | null>(selectedServerId);
+  const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
+  const voiceParticipantsRef = useRef<Record<string, VoiceParticipant[]>>(voiceParticipantsByServer);
   const reminderTimersRef = useRef<number[]>([]);
 
   const localStreamRef = useRef<MediaStream | null>(null);
+  const localVideoStreamRef = useRef<MediaStream | null>(null);
   const audioCtxRef = useRef<AudioContext | null>(null);
   const vadIntervalRef = useRef<number | null>(null);
   const peerConnectionsRef = useRef<Map<string, RTCPeerConnection>>(new Map());
+  const videoSendersByPeerRef = useRef<Map<string, RTCRtpSender[]>>(new Map());
   const remoteAudioElsRef = useRef<Map<string, HTMLAudioElement>>(new Map());
+  const pendingIceCandidatesRef = useRef<Map<string, RTCIceCandidateInit[]>>(new Map());
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
 
   useEffect(() => {
     userRef.current = user;
   }, [user]);
+  useEffect(() => {
+    localVideoStreamRef.current = localVideoStream;
+  }, [localVideoStream]);
   useEffect(() => {
     preferencesRef.current = preferences;
   }, [preferences]);
@@ -186,6 +229,51 @@ export default function App() {
   useEffect(() => {
     serversRef.current = servers;
   }, [servers]);
+  useEffect(() => {
+    activeViewRef.current = activeView;
+  }, [activeView]);
+  useEffect(() => {
+    activeDmFriendIdRef.current = activeDmFriendId;
+  }, [activeDmFriendId]);
+  useEffect(() => {
+    selectedServerIdRef.current = selectedServerId;
+  }, [selectedServerId]);
+  useEffect(() => {
+    selectedChannelIdRef.current = selectedChannelId;
+  }, [selectedChannelId]);
+  useEffect(() => {
+    voiceParticipantsRef.current = voiceParticipantsByServer;
+  }, [voiceParticipantsByServer]);
+
+  // Open invite modal automatically once authenticated if ?invite=CODE was visited
+  useEffect(() => {
+    if (!user || !pendingInviteCode) return;
+    setIsNewServerOpen(true);
+    try {
+      const url = new URL(window.location.href);
+      if (url.searchParams.has('invite')) {
+        url.searchParams.delete('invite');
+        window.history.replaceState({}, '', url.pathname + url.search + url.hash);
+      }
+    } catch {
+      // ignore history errors
+    }
+  }, [user, pendingInviteCode]);
+
+  // Ensure selectedChannelId stays valid whenever selectedServerId changes
+  useEffect(() => {
+    if (!selectedServerId) {
+      setSelectedChannelId(null);
+      return;
+    }
+    const srv = servers.find((s) => s.id === selectedServerId);
+    if (!srv) return;
+    const textChannels = srv.channels.filter((c) => c.type !== 'voice');
+    const exists = srv.channels.some((c) => c.id === selectedChannelId);
+    if (!selectedChannelId || !exists) {
+      setSelectedChannelId(textChannels[0]?.id || srv.channels[0]?.id || null);
+    }
+  }, [selectedServerId, servers, selectedChannelId]);
 
   const showToast = useCallback((msg: string) => {
     setToastMsg(msg);
@@ -200,11 +288,79 @@ export default function App() {
     }
   }, []);
 
-  // Status-driven incoming message notification handler
+  const addNotification = useCallback((notif: Omit<AppNotification, 'id' | 'createdAt' | 'read'>) => {
+    setNotifications((prev) => [
+      {
+        ...notif,
+        id: `notif_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+        createdAt: new Date().toISOString(),
+        read: false,
+      },
+      ...prev.slice(0, 49),
+    ]);
+  }, []);
+
+  const clearDmUnread = useCallback((friendId: string) => {
+    setUnreadDmByFriendId((prev) => {
+      if (!prev[friendId]) return prev;
+      const next = { ...prev };
+      delete next[friendId];
+      return next;
+    });
+  }, []);
+
+  // Status-driven incoming message & inbox notification handler
   const dispatchIncomingNotification = useCallback(
     (msg: ChatMessage) => {
       const me = userRef.current;
       if (!me || msg.authorId === me.id) return;
+
+      const preview =
+        msg.content ||
+        (msg.attachmentType === 'audio'
+          ? 'Sent a voice message'
+          : msg.attachmentType === 'video'
+          ? 'Sent a video'
+          : msg.attachmentType === 'image'
+          ? 'Sent an image'
+          : 'Sent a message');
+
+      const isDm = Boolean(msg.dmKey);
+      const isViewingThisDm =
+        isDm && activeViewRef.current === 'friends' && activeDmFriendIdRef.current === msg.authorId;
+      const isViewingThisChannel =
+        !isDm &&
+        activeViewRef.current === 'server' &&
+        selectedServerIdRef.current === msg.serverId &&
+        selectedChannelIdRef.current === msg.channelId;
+
+      if (isDm && !isViewingThisDm) {
+        setUnreadDmByFriendId((prev) => ({
+          ...prev,
+          [msg.authorId]: (prev[msg.authorId] || 0) + 1,
+        }));
+        setDmPopupFriendIds((prev) => [msg.authorId, ...prev.filter((id) => id !== msg.authorId)].slice(0, 8));
+        addNotification({
+          kind: 'dm',
+          title: `DM from ${msg.authorName}`,
+          body: preview,
+          avatarUrl: msg.authorAvatar,
+          friendId: msg.authorId,
+          messageId: msg.id,
+        });
+      } else if (!isDm && !isViewingThisChannel) {
+        const srv = serversRef.current.find((s) => s.id === msg.serverId);
+        const ch = srv?.channels.find((c) => c.id === msg.channelId);
+        addNotification({
+          kind: 'server_message',
+          title: `${msg.authorName}${ch ? ` in #${ch.name}` : ''}`,
+          body: preview,
+          avatarUrl: msg.authorAvatar,
+          serverId: msg.serverId,
+          channelId: msg.channelId,
+          messageId: msg.id,
+        });
+      }
 
       const status: UserStatus = me.status || 'online';
       // Do Not Disturb & Invisible suppress desktop popups & notification sounds
@@ -212,18 +368,12 @@ export default function App() {
         return;
       }
 
-      const preview =
-        msg.content ||
-        (msg.attachmentType === 'audio'
-          ? 'Sent a voice message'
-          : msg.attachmentType === 'image'
-          ? 'Sent an image'
-          : 'Sent a message');
-
-      showToast(`${msg.authorName}: ${preview}`);
+      if (!isViewingThisDm && !isViewingThisChannel) {
+        showToast(`${msg.authorName}: ${preview}`);
+      }
 
       if (status === 'online') {
-        if (preferencesRef.current.notificationSound) {
+        if (preferencesRef.current.notificationSound && !isViewingThisDm && !isViewingThisChannel) {
           playNotificationChime();
         }
         if (
@@ -241,7 +391,7 @@ export default function App() {
         }
       }
     },
-    [showToast]
+    [showToast, addNotification]
   );
 
   // Voice Media Cleanup
@@ -262,6 +412,9 @@ export default function App() {
       pc.close();
     }
     peerConnectionsRef.current.clear();
+    videoSendersByPeerRef.current.clear();
+    pendingIceCandidatesRef.current.clear();
+    setRemoteVideoStreams({});
     for (const el of remoteAudioElsRef.current.values()) {
       el.pause();
       el.srcObject = null;
@@ -273,6 +426,9 @@ export default function App() {
   useEffect(() => {
     return () => {
       cleanupVoiceMedia();
+      if (localVideoStreamRef.current) {
+        localVideoStreamRef.current.getTracks().forEach((t) => t.stop());
+      }
       reminderTimersRef.current.forEach((id) => window.clearTimeout(id));
     };
   }, [cleanupVoiceMedia]);
@@ -302,11 +458,22 @@ export default function App() {
         muted: voiceInfo.muted,
         deafened: voiceInfo.deafened,
         speaking: voiceInfo.speaking,
+        isStreaming: Boolean(voiceInfo.isStreaming),
+        streamTitle: voiceInfo.streamTitle || '',
       });
 
-      // Also update optimistic local participant list if WS is unavailable
       const me = userRef.current;
       if (me) {
+        const token = getStoredToken();
+        if (token?.startsWith('local_token:')) {
+          localFallback.updateLocalVoiceState(me.id, {
+            muted: voiceInfo.muted,
+            deafened: voiceInfo.deafened,
+            speaking: voiceInfo.speaking,
+            isStreaming: Boolean(voiceInfo.isStreaming),
+            streamTitle: voiceInfo.streamTitle || '',
+          });
+        }
         setVoiceParticipantsByServer((prev) => {
           const list = prev[voiceInfo.serverId] || [];
           if (!list.some((p) => p.userId === me.id)) return prev;
@@ -319,6 +486,8 @@ export default function App() {
                     muted: voiceInfo.muted,
                     deafened: voiceInfo.deafened,
                     speaking: voiceInfo.speaking,
+                    isStreaming: Boolean(voiceInfo.isStreaming),
+                    streamTitle: voiceInfo.streamTitle || '',
                   }
                 : p
             ),
@@ -336,13 +505,24 @@ export default function App() {
       if (existing) return existing;
 
       const pc = new RTCPeerConnection({
-        iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+        ],
       });
 
       if (localStreamRef.current) {
         localStreamRef.current.getAudioTracks().forEach((track) => {
           pc.addTrack(track, localStreamRef.current!);
         });
+      }
+
+      if (localVideoStreamRef.current) {
+        const senders: RTCRtpSender[] = [];
+        localVideoStreamRef.current.getTracks().forEach((track) => {
+          senders.push(pc.addTrack(track, localVideoStreamRef.current!));
+        });
+        videoSendersByPeerRef.current.set(peerUserId, senders);
       }
 
       pc.onicecandidate = (ev) => {
@@ -357,13 +537,32 @@ export default function App() {
       };
 
       pc.ontrack = (ev) => {
+        const stream = ev.streams[0] || new MediaStream([ev.track]);
+        if (ev.track.kind === 'video') {
+          setRemoteVideoStreams((prev) => ({
+            ...prev,
+            [peerUserId]: stream,
+          }));
+          ev.track.onended = () => {
+            setRemoteVideoStreams((prev) => {
+              const next = { ...prev };
+              delete next[peerUserId];
+              return next;
+            });
+          };
+          return;
+        }
+
         let audioEl = remoteAudioElsRef.current.get(peerUserId);
         if (!audioEl) {
           audioEl = document.createElement('audio');
           audioEl.autoplay = true;
+          audioEl.setAttribute('playsinline', 'true');
+          audioEl.style.display = 'none';
+          document.body.appendChild(audioEl);
           remoteAudioElsRef.current.set(peerUserId, audioEl);
         }
-        audioEl.srcObject = ev.streams[0];
+        audioEl.srcObject = stream;
         const voiceState = activeVoiceRef.current;
         audioEl.muted = Boolean(voiceState?.deafened);
         audioEl.volume = voiceState?.deafened
@@ -456,21 +655,130 @@ export default function App() {
     return () => clearTimeout(timer);
   }, [serverSearch, user?.id, loadServers]);
 
-  // Load initial voice participants when opening a server
-  useEffect(() => {
-    if (!user || !selectedServerId) return;
-    api
-      .getVoiceParticipants(selectedServerId)
-      .then((res) => {
-        if (res.participants.length > 0) {
-          setVoiceParticipantsByServer((prev) => ({
-            ...prev,
-            [selectedServerId]: res.participants,
-          }));
+  // Handle voice participants update (peer join/leave SFX, cleanup disconnected peers, and WebRTC offer initiation)
+  const handleVoiceParticipantsSync = useCallback(
+    async (serverId: string, participants: VoiceParticipant[]) => {
+      const prevServerList = voiceParticipantsRef.current[serverId] || [];
+      const currentVoice = activeVoiceRef.current;
+      const me = userRef.current;
+
+      if (currentVoice && me && currentVoice.serverId === serverId) {
+        const prevRoomPeers = new Set(
+          prevServerList
+            .filter((p) => p.channelId === currentVoice.channelId && p.userId !== me.id)
+            .map((p) => p.userId)
+        );
+        const nextRoomPeers = participants.filter(
+          (p) => p.channelId === currentVoice.channelId && p.userId !== me.id
+        );
+        const nextRoomIds = new Set(nextRoomPeers.map((p) => p.userId));
+
+        for (const nextPeer of nextRoomPeers) {
+          if (!prevRoomPeers.has(nextPeer.userId)) {
+            if (!currentVoice.deafened) playVcPeerJoinSound();
+            break;
+          }
         }
-      })
-      .catch(() => {});
-  }, [user?.id, selectedServerId]);
+        for (const prevPeerId of prevRoomPeers) {
+          if (!nextRoomIds.has(prevPeerId)) {
+            if (!currentVoice.deafened) playVcPeerLeaveSound();
+            const pc = peerConnectionsRef.current.get(prevPeerId);
+            if (pc) {
+              pc.close();
+              peerConnectionsRef.current.delete(prevPeerId);
+            }
+            videoSendersByPeerRef.current.delete(prevPeerId);
+            pendingIceCandidatesRef.current.delete(prevPeerId);
+            setRemoteVideoStreams((prev) => {
+              if (!prev[prevPeerId]) return prev;
+              const next = { ...prev };
+              delete next[prevPeerId];
+              return next;
+            });
+            const el = remoteAudioElsRef.current.get(prevPeerId);
+            if (el) {
+              el.pause();
+              el.srcObject = null;
+              el.remove();
+              remoteAudioElsRef.current.delete(prevPeerId);
+            }
+          }
+        }
+
+        for (const peer of nextRoomPeers) {
+          if (!peerConnectionsRef.current.has(peer.userId) && me.id < peer.userId) {
+            const pc = getOrCreatePeerConnection(peer.userId, currentVoice.channelId);
+            try {
+              const offer = await pc.createOffer();
+              await pc.setLocalDescription(offer);
+              sendWs({
+                type: 'voice:signal',
+                targetUserId: peer.userId,
+                channelId: currentVoice.channelId,
+                signal: { sdp: pc.localDescription },
+              });
+            } catch {
+              // Ignore signaling race
+            }
+          }
+        }
+      }
+
+      setVoiceParticipantsByServer((prev) => ({
+        ...prev,
+        [serverId]: participants,
+      }));
+    },
+    [getOrCreatePeerConnection, sendWs]
+  );
+
+  // Poll voice participants reliably for active server & active voice connection
+  useEffect(() => {
+    if (!user) return;
+    const targetIds = Array.from(
+      new Set([selectedServerId, activeVoice?.serverId].filter(Boolean) as string[])
+    );
+    if (targetIds.length === 0) return;
+
+    const fetchAll = () => {
+      targetIds.forEach((sid) => {
+        api
+          .getVoiceParticipants(sid)
+          .then((res) => {
+            handleVoiceParticipantsSync(sid, res.participants || []);
+          })
+          .catch(() => {});
+      });
+    };
+
+    fetchAll();
+    const interval = window.setInterval(fetchAll, 3000);
+    return () => window.clearInterval(interval);
+  }, [user?.id, selectedServerId, activeVoice?.serverId, handleVoiceParticipantsSync]);
+
+  // Local multi-tab BroadcastChannel sync for fallback mode
+  useEffect(() => {
+    if (!user || typeof BroadcastChannel === 'undefined') return;
+    const bc = new BroadcastChannel('pilgrim_realtime_sync');
+    bc.onmessage = (ev) => {
+      if (ev.data?.type === 'voice:sync' && Array.isArray(ev.data.participants)) {
+        const list: VoiceParticipant[] = ev.data.participants;
+        const grouped: Record<string, VoiceParticipant[]> = {};
+        for (const p of list) {
+          if (!grouped[p.serverId]) grouped[p.serverId] = [];
+          grouped[p.serverId].push(p);
+        }
+        const checkIds = new Set([
+          ...Object.keys(voiceParticipantsRef.current),
+          ...Object.keys(grouped),
+        ]);
+        checkIds.forEach((sid) => {
+          handleVoiceParticipantsSync(sid, grouped[sid] || []);
+        });
+      }
+    };
+    return () => bc.close();
+  }, [user?.id, handleVoiceParticipantsSync]);
 
   // WebSocket Connection for Real-Time Chat, Presence, and Voice Channels
   useEffect(() => {
@@ -481,6 +789,21 @@ export default function App() {
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
     const ws = new WebSocket(`${protocol}//${window.location.host}/ws?token=${encodeURIComponent(token)}`);
     wsRef.current = ws;
+
+    ws.onopen = () => {
+      const currentVoice = activeVoiceRef.current;
+      if (currentVoice) {
+        ws.send(
+          JSON.stringify({
+            type: 'voice:join',
+            serverId: currentVoice.serverId,
+            channelId: currentVoice.channelId,
+            muted: currentVoice.muted,
+            deafened: currentVoice.deafened,
+          })
+        );
+      }
+    };
 
     ws.onmessage = async (event) => {
       try {
@@ -494,11 +817,62 @@ export default function App() {
               f.id === data.userId ? { ...f, status: data.status } : f
             ),
           }));
+        } else if (data.type === 'presence:stream' && data.userId) {
+          setStreamingUsersMap((prev) => ({
+            ...prev,
+            [data.userId]: {
+              isStreaming: Boolean(data.isStreaming),
+              streamTitle: data.streamTitle || '',
+            },
+          }));
+          setFriendsData((prev) => ({
+            ...prev,
+            friends: prev.friends.map((f) =>
+              f.id === data.userId
+                ? { ...f, isStreaming: Boolean(data.isStreaming), streamTitle: data.streamTitle || '' }
+                : f
+            ),
+          }));
+          setViewedProfile((prev) =>
+            prev && prev.user.id === data.userId
+              ? {
+                  ...prev,
+                  user: {
+                    ...prev.user,
+                    isStreaming: Boolean(data.isStreaming),
+                    streamTitle: data.streamTitle || '',
+                  },
+                }
+              : prev
+          );
+          if (!data.isStreaming) {
+            setRemoteVideoStreams((prev) => {
+              if (!prev[data.userId]) return prev;
+              const next = { ...prev };
+              delete next[data.userId];
+              return next;
+            });
+          }
         } else if (data.type === 'chat:message' && data.message) {
           setIncomingWsMessage(data.message);
           dispatchIncomingNotification(data.message);
         } else if (data.type === 'chat:message_updated' && data.message) {
           setIncomingWsUpdatedMessage(data.message);
+        } else if (data.type === 'chat:reaction_added' && data.message) {
+          const me = userRef.current;
+          if (me && data.actorId && data.actorId !== me.id) {
+            const msg: ChatMessage = data.message;
+            addNotification({
+              kind: 'reaction',
+              title: `${data.actorName || 'Someone'} reacted ${data.emoji || ''}`,
+              body: msg.content || (msg.attachmentType ? `[${msg.attachmentType}]` : 'Message'),
+              avatarUrl: data.actorAvatar,
+              serverId: msg.serverId,
+              channelId: msg.channelId,
+              friendId: msg.dmKey ? data.actorId : undefined,
+              messageId: msg.id,
+            });
+          }
         } else if (data.type === 'chat:message_deleted' && data.messageId) {
           setIncomingWsDeletedMessageId(data.messageId);
         } else if (
@@ -508,40 +882,27 @@ export default function App() {
         ) {
           loadServers(serverSearch);
         } else if (data.type === 'friend:update') {
-          loadFriends();
-          loadPosts();
-        } else if (data.type === 'voice:participants' && data.serverId) {
-          const participants: VoiceParticipant[] = data.participants || [];
-          setVoiceParticipantsByServer((prev) => ({
-            ...prev,
-            [data.serverId]: participants,
-          }));
-
-          // Initiate WebRTC offers cleanly if connected to the same voice channel
-          const currentVoice = activeVoiceRef.current;
-          const me = userRef.current;
-          if (currentVoice && me && currentVoice.serverId === data.serverId) {
-            const peersInRoom = participants.filter(
-              (p) => p.channelId === currentVoice.channelId && p.userId !== me.id
-            );
-            for (const peer of peersInRoom) {
-              if (!peerConnectionsRef.current.has(peer.userId) && me.id < peer.userId) {
-                const pc = getOrCreatePeerConnection(peer.userId, currentVoice.channelId);
-                try {
-                  const offer = await pc.createOffer();
-                  await pc.setLocalDescription(offer);
-                  sendWs({
-                    type: 'voice:signal',
-                    targetUserId: peer.userId,
-                    channelId: currentVoice.channelId,
-                    signal: { sdp: pc.localDescription },
+          const prevReqIds = new Set(friendsData.incomingRequests.map((r) => r.id));
+          api
+            .getFriends()
+            .then((res) => {
+              setFriendsData(res);
+              for (const req of res.incomingRequests) {
+                if (!prevReqIds.has(req.id)) {
+                  addNotification({
+                    kind: 'friend_request',
+                    title: `Friend request from ${req.user.name}`,
+                    body: req.user.tag,
+                    avatarUrl: req.user.avatarUrl,
+                    friendId: req.user.id,
                   });
-                } catch {
-                  // Ignore signaling race
                 }
               }
-            }
-          }
+            })
+            .catch(() => {});
+          loadPosts();
+        } else if (data.type === 'voice:participants' && data.serverId) {
+          await handleVoiceParticipantsSync(data.serverId, data.participants || []);
         } else if (data.type === 'voice:signal' && data.fromUserId && data.signal) {
           const currentVoice = activeVoiceRef.current;
           if (!currentVoice || currentVoice.channelId !== data.channelId) return;
@@ -549,6 +910,13 @@ export default function App() {
           try {
             if (data.signal.sdp) {
               await pc.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
+              const queued = pendingIceCandidatesRef.current.get(data.fromUserId) || [];
+              if (queued.length > 0) {
+                pendingIceCandidatesRef.current.delete(data.fromUserId);
+                for (const cand of queued) {
+                  await pc.addIceCandidate(new RTCIceCandidate(cand)).catch(() => {});
+                }
+              }
               if (data.signal.sdp.type === 'offer') {
                 const answer = await pc.createAnswer();
                 await pc.setLocalDescription(answer);
@@ -560,7 +928,13 @@ export default function App() {
                 });
               }
             } else if (data.signal.candidate) {
-              await pc.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+              if (!pc.remoteDescription) {
+                const q = pendingIceCandidatesRef.current.get(data.fromUserId) || [];
+                q.push(data.signal.candidate);
+                pendingIceCandidatesRef.current.set(data.fromUserId, q);
+              } else {
+                await pc.addIceCandidate(new RTCIceCandidate(data.signal.candidate));
+              }
             }
           } catch {
             // Ignore transient ICE errors
@@ -575,7 +949,17 @@ export default function App() {
       if (wsRef.current === ws) wsRef.current = null;
       ws.close();
     };
-  }, [user?.id, loadServers, loadFriends, loadPosts, serverSearch, dispatchIncomingNotification, getOrCreatePeerConnection, sendWs]);
+  }, [
+    user?.id,
+    loadServers,
+    loadPosts,
+    serverSearch,
+    dispatchIncomingNotification,
+    addNotification,
+    getOrCreatePeerConnection,
+    handleVoiceParticipantsSync,
+    sendWs,
+  ]);
 
   // Desktop Push-to-Talk Keyboard Listener
   const handlePttHoldStart = useCallback(() => {
@@ -655,6 +1039,10 @@ export default function App() {
 
     const canSpeak = hasServerPermission(server, user.id, 'speakVoice');
     cleanupVoiceMedia();
+    playVcJoinSound();
+
+    const isAlreadyStreaming = Boolean(localVideoStreamRef.current);
+    const activeTitle = user.streamTitle || '';
 
     const nextVoice: ActiveVoiceInfo = {
       serverId: server.id,
@@ -665,6 +1053,8 @@ export default function App() {
       deafened: false,
       speaking: false,
       pttActive: false,
+      isStreaming: isAlreadyStreaming,
+      streamTitle: activeTitle,
     };
     setActiveVoice(nextVoice);
 
@@ -723,26 +1113,32 @@ export default function App() {
       showToast('Joined voice in listen-only mode (no microphone access).');
     }
 
-    // Optimistic local participant entry (ensures voice UI works even in local fallback mode)
+    const participantEntry: VoiceParticipant = {
+      userId: user.id,
+      userName: user.name,
+      userAvatar: user.avatarUrl,
+      serverId: server.id,
+      channelId: channel.id,
+      muted: nextVoice.muted,
+      deafened: false,
+      speaking: false,
+      isStreaming: isAlreadyStreaming,
+      streamTitle: activeTitle,
+    };
+
+    const token = getStoredToken();
+    if (token?.startsWith('local_token:')) {
+      localFallback.joinLocalVoice(participantEntry);
+    }
+
+    // Optimistic local participant entry
     setVoiceParticipantsByServer((prev) => {
       const cleaned: Record<string, VoiceParticipant[]> = {};
       for (const [sid, list] of Object.entries(prev)) {
         cleaned[sid] = list.filter((p) => p.userId !== user.id);
       }
       const existing = cleaned[server.id] || [];
-      cleaned[server.id] = [
-        ...existing,
-        {
-          userId: user.id,
-          userName: user.name,
-          userAvatar: user.avatarUrl,
-          serverId: server.id,
-          channelId: channel.id,
-          muted: nextVoice.muted,
-          deafened: false,
-          speaking: false,
-        },
-      ];
+      cleaned[server.id] = [...existing, participantEntry];
       return cleaned;
     });
 
@@ -752,16 +1148,35 @@ export default function App() {
       channelId: channel.id,
       muted: nextVoice.muted,
       deafened: false,
+      isStreaming: isAlreadyStreaming,
+      streamTitle: activeTitle,
     });
+    api
+      .getVoiceParticipants(server.id)
+      .then((res) => {
+        if (res.participants?.length) {
+          handleVoiceParticipantsSync(server.id, res.participants);
+        }
+      })
+      .catch(() => {});
     showToast(`Joined voice channel: ${channel.name}`);
   };
 
   const handleLeaveVoice = useCallback(() => {
+    const wasInVoice = Boolean(activeVoiceRef.current);
     const me = userRef.current;
     sendWs({ type: 'voice:leave' });
     cleanupVoiceMedia();
     setActiveVoice(null);
+    if (wasInVoice) {
+      playVcLeaveSound();
+      showToast('Disconnected from voice channel.');
+    }
     if (me) {
+      const token = getStoredToken();
+      if (token?.startsWith('local_token:')) {
+        localFallback.leaveLocalVoice(me.id);
+      }
       setVoiceParticipantsByServer((prev) => {
         const next: Record<string, VoiceParticipant[]> = {};
         for (const [sid, list] of Object.entries(prev)) {
@@ -770,8 +1185,186 @@ export default function App() {
         return next;
       });
     }
-    showToast('Disconnected from voice channel.');
   }, [cleanupVoiceMedia, sendWs, showToast]);
+
+  const handleStopLiveStream = useCallback(async () => {
+    const stream = localVideoStreamRef.current;
+    if (stream) {
+      stream.getTracks().forEach((t) => {
+        t.onended = null;
+        t.stop();
+      });
+      localVideoStreamRef.current = null;
+    }
+    setLocalVideoStream(null);
+
+    const currentVoice = activeVoiceRef.current;
+    for (const [peerUserId, pc] of peerConnectionsRef.current.entries()) {
+      const senders = videoSendersByPeerRef.current.get(peerUserId) || [];
+      for (const s of senders) {
+        try {
+          pc.removeTrack(s);
+        } catch {
+          // ignore
+        }
+      }
+      videoSendersByPeerRef.current.delete(peerUserId);
+      if (currentVoice && senders.length > 0) {
+        try {
+          const offer = await pc.createOffer();
+          await pc.setLocalDescription(offer);
+          sendWs({
+            type: 'voice:signal',
+            targetUserId: peerUserId,
+            channelId: currentVoice.channelId,
+            signal: { sdp: pc.localDescription },
+          });
+        } catch {
+          // ignore
+        }
+      }
+    }
+
+    if (currentVoice) {
+      const nextVoice: ActiveVoiceInfo = { ...currentVoice, isStreaming: false, streamTitle: '' };
+      setActiveVoice(nextVoice);
+      syncMicTransmission(nextVoice);
+    }
+
+    try {
+      const res = await api.updateStreamStatus(false, '');
+      setUser(res.user);
+      setViewedProfile((prev) =>
+        prev && prev.user.id === res.user.id ? { ...prev, user: res.user } : prev
+      );
+    } catch {
+      setUser((prev) => (prev ? { ...prev, isStreaming: false, streamTitle: '' } : prev));
+    }
+
+    const me = userRef.current;
+    if (me) {
+      setStreamingUsersMap((prev) => ({
+        ...prev,
+        [me.id]: { isStreaming: false, streamTitle: '' },
+      }));
+    }
+    showToast('Live stream ended.');
+  }, [sendWs, showToast, syncMicTransmission]);
+
+  const handleStartLiveStream = useCallback(
+    async (options: {
+      source: 'camera' | 'screen';
+      title: string;
+      announceToFeed?: boolean;
+      announceVisibility?: Visibility;
+    }) => {
+      if (!navigator.mediaDevices) {
+        throw new Error('Media streaming is not supported in this browser.');
+      }
+
+      if (localVideoStreamRef.current) {
+        localVideoStreamRef.current.getTracks().forEach((t) => {
+          t.onended = null;
+          t.stop();
+        });
+      }
+
+      let stream: MediaStream;
+      if (options.source === 'screen') {
+        if (!navigator.mediaDevices.getDisplayMedia) {
+          throw new Error('Screen sharing is not supported in this browser.');
+        }
+        stream = await navigator.mediaDevices.getDisplayMedia({
+          video: true,
+          audio: true,
+        });
+      } else {
+        stream = await navigator.mediaDevices.getUserMedia({
+          video: true,
+          audio: !activeVoiceRef.current,
+        });
+      }
+
+      const [videoTrack] = stream.getVideoTracks();
+      if (videoTrack) {
+        videoTrack.onended = () => {
+          handleStopLiveStream();
+        };
+      }
+
+      localVideoStreamRef.current = stream;
+      setLocalVideoStream(stream);
+
+      const currentVoice = activeVoiceRef.current;
+      for (const [peerUserId, pc] of peerConnectionsRef.current.entries()) {
+        const prevSenders = videoSendersByPeerRef.current.get(peerUserId) || [];
+        for (const s of prevSenders) {
+          try {
+            pc.removeTrack(s);
+          } catch {
+            // ignore
+          }
+        }
+        const nextSenders: RTCRtpSender[] = [];
+        stream.getTracks().forEach((t) => {
+          nextSenders.push(pc.addTrack(t, stream));
+        });
+        videoSendersByPeerRef.current.set(peerUserId, nextSenders);
+
+        if (currentVoice) {
+          try {
+            const offer = await pc.createOffer();
+            await pc.setLocalDescription(offer);
+            sendWs({
+              type: 'voice:signal',
+              targetUserId: peerUserId,
+              channelId: currentVoice.channelId,
+              signal: { sdp: pc.localDescription },
+            });
+          } catch {
+            // ignore
+          }
+        }
+      }
+
+      if (currentVoice) {
+        const nextVoice: ActiveVoiceInfo = {
+          ...currentVoice,
+          isStreaming: true,
+          streamTitle: options.title,
+        };
+        setActiveVoice(nextVoice);
+        syncMicTransmission(nextVoice);
+      }
+
+      const res = await api.updateStreamStatus(true, options.title);
+      setUser(res.user);
+      setViewedProfile((prev) =>
+        prev && prev.user.id === res.user.id ? { ...prev, user: res.user } : prev
+      );
+      setStreamingUsersMap((prev) => ({
+        ...prev,
+        [res.user.id]: { isStreaming: true, streamTitle: options.title },
+      }));
+
+      if (options.announceToFeed) {
+        try {
+          const postRes = await api.createPost({
+            title: `🔴 LIVE NOW: ${options.title}`,
+            content: `${res.user.name} started a live stream: "${options.title}". Visit their profile or join them in voice to tune in!`,
+            visibility: options.announceVisibility || 'public',
+          });
+          setPosts((prev) => [postRes.post, ...prev]);
+          setProfilePosts((prev) => [postRes.post, ...prev]);
+        } catch {
+          // optional announcement failure is non-fatal
+        }
+      }
+
+      showToast(`Live stream started: ${options.title}`);
+    },
+    [handleStopLiveStream, sendWs, showToast, syncMicTransmission]
+  );
 
   const handleToggleVoiceMute = () => {
     if (!activeVoice || !user) return;
@@ -781,6 +1374,9 @@ export default function App() {
       return;
     }
     const nextMuted = !activeVoice.muted;
+    if (nextMuted) playVcMuteSound();
+    else playVcUnmuteSound();
+
     const next: ActiveVoiceInfo = {
       ...activeVoice,
       muted: nextMuted,
@@ -794,6 +1390,9 @@ export default function App() {
   const handleToggleVoiceDeafen = () => {
     if (!activeVoice) return;
     const nextDeafened = !activeVoice.deafened;
+    if (nextDeafened) playVcDeafenSound();
+    else playVcUndeafenSound();
+
     const next: ActiveVoiceInfo = {
       ...activeVoice,
       deafened: nextDeafened,
@@ -804,6 +1403,37 @@ export default function App() {
     syncMicTransmission(next);
   };
 
+  const handleSendInviteDm = async (friendId: string, inviteUrl: string, serverName: string) => {
+    await api.sendDirectMessage(friendId, {
+      content: `Join me on "${serverName}" in Pilgrim! ${inviteUrl}`,
+    });
+    showToast('Invite sent via Direct Message!');
+  };
+
+  const handleSelectDmPopup = (friendId: string) => {
+    setActiveDmFriendId(friendId);
+    clearDmUnread(friendId);
+    setDmPopupFriendIds((prev) => prev.filter((id) => id !== friendId));
+    setActiveView('friends');
+  };
+
+  const handleDismissDmPopup = (friendId: string) => {
+    setDmPopupFriendIds((prev) => prev.filter((id) => id !== friendId));
+  };
+
+  const handleSelectNotification = (notif: AppNotification) => {
+    setNotifications((prev) => prev.map((n) => (n.id === notif.id ? { ...n, read: true } : n)));
+    if (notif.friendId) {
+      handleSelectDmPopup(notif.friendId);
+    } else if (notif.serverId) {
+      setSelectedServerId(notif.serverId);
+      if (notif.channelId) setSelectedChannelId(notif.channelId);
+      setActiveView('server');
+    } else if (notif.kind === 'friend_request' || notif.kind === 'friend_accept') {
+      setActiveView('friends');
+    }
+  };
+
   const handleAuthSuccess = (authenticatedUser: User, newSignup = false) => {
     setUser(authenticatedUser);
     setIsNewSignup(newSignup);
@@ -811,6 +1441,9 @@ export default function App() {
   };
 
   const handleSignOut = () => {
+    if (localVideoStreamRef.current) {
+      handleStopLiveStream();
+    }
     handleLeaveVoice();
     api.logout();
     setUser(null);
@@ -1012,11 +1645,33 @@ export default function App() {
   }
 
   const activeServer = servers.find((s) => s.id === selectedServerId) || null;
+  const isFlushServerView = activeView === 'server' && Boolean(activeServer);
+  const totalUnreadDms = Object.values(unreadDmByFriendId).reduce((sum, n) => sum + n, 0);
+
+  // Aggregate live streaming user IDs across state, friends, voice rooms, and profile
+  const streamingUserIds = new Set<string>();
+  if (user.isStreaming || localVideoStream) streamingUserIds.add(user.id);
+  for (const f of friendsData.friends) {
+    if (f.isStreaming) streamingUserIds.add(f.id);
+  }
+  for (const list of Object.values(voiceParticipantsByServer)) {
+    for (const p of list) {
+      if (p.isStreaming) streamingUserIds.add(p.userId);
+    }
+  }
+  if (viewedProfile?.user.isStreaming) {
+    streamingUserIds.add(viewedProfile.user.id);
+  }
+  for (const [uid, info] of Object.entries(streamingUsersMap)) {
+    if (info.isStreaming) streamingUserIds.add(uid);
+    else streamingUserIds.delete(uid);
+  }
 
   const getHeaderTitle = () => {
     if (activeView === 'startup') return 'Welcome & Features';
     if (activeView === 'feed') return 'Community Feed';
     if (activeView === 'friends') return 'Friends & Direct Messages';
+    if (activeView === 'discover') return 'Discover Servers';
     if (activeView === 'settings') return 'Appearance, Voice & Account';
     if (activeView === 'safety') return 'Safety & Reports';
     if (activeView === 'profile') return viewedProfile?.user.name || 'Profile Dashboard';
@@ -1029,8 +1684,43 @@ export default function App() {
     return p.mediaType === feedFilter;
   });
 
+  const handleTouchStart = (e: React.TouchEvent<HTMLDivElement>) => {
+    const t = e.touches[0];
+    if (!t) return;
+    touchStartRef.current = { x: t.clientX, y: t.clientY };
+  };
+
+  const handleTouchEnd = (e: React.TouchEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    touchStartRef.current = null;
+    if (!start) return;
+    const t = e.changedTouches[0];
+    if (!t) return;
+    const dx = t.clientX - start.x;
+    const dy = t.clientY - start.y;
+    if (Math.abs(dx) < 75 || Math.abs(dy) > 55) return;
+
+    if (dx > 0) {
+      if (isMobileMembersOpen) {
+        setIsMobileMembersOpen(false);
+      } else {
+        setIsMobileSidebarOpen(true);
+      }
+    } else {
+      if (isMobileSidebarOpen) {
+        setIsMobileSidebarOpen(false);
+      } else if (activeView === 'server' && activeServer) {
+        setIsMobileMembersOpen(true);
+      }
+    }
+  };
+
   return (
-    <div className="min-h-screen bg-[#f4f4f5] dark:bg-zinc-950 text-zinc-950 dark:text-zinc-100 flex transition-colors">
+    <div
+      onTouchStart={handleTouchStart}
+      onTouchEnd={handleTouchEnd}
+      className="min-h-screen bg-[#f4f4f5] dark:bg-zinc-950 text-zinc-950 dark:text-zinc-100 flex transition-colors"
+    >
       {/* Toast Notification */}
       <AnimatePresence>
         {toastMsg && (
@@ -1038,7 +1728,7 @@ export default function App() {
             initial={{ opacity: 0, y: 16 }}
             animate={{ opacity: 1, y: 0 }}
             exit={{ opacity: 0, y: 12 }}
-            className="fixed bottom-5 right-5 z-50 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 px-4 py-2.5 rounded-xl shadow-lg border border-zinc-800 dark:border-zinc-200 text-xs font-medium flex items-center gap-2 max-w-sm"
+            className="fixed bottom-20 lg:bottom-5 right-4 lg:right-5 z-50 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 px-4 py-2.5 rounded-xl shadow-lg border border-zinc-800 dark:border-zinc-200 text-xs font-medium flex items-center gap-2 max-w-sm"
           >
             <CheckCircle2 className="w-4 h-4 text-zinc-300 dark:text-zinc-700 shrink-0" />
             <span className="truncate">{toastMsg}</span>
@@ -1055,24 +1745,45 @@ export default function App() {
           setActiveView(view);
         }}
         servers={servers}
-        serverSearch={serverSearch}
-        setServerSearch={setServerSearch}
         selectedServerId={selectedServerId}
+        selectedChannelId={selectedChannelId}
+        onSelectChannelId={(cid) => setSelectedChannelId(cid)}
         onSelectServer={(sid) => {
           setSelectedServerId(sid);
           setActiveView('server');
         }}
-        onJoinServer={handleJoinServer}
+        onJoinVoiceChannel={handleJoinVoiceChannel}
+        voiceParticipants={selectedServerId ? voiceParticipantsByServer[selectedServerId] || [] : []}
         onOpenNewServerModal={() => setIsNewServerOpen(true)}
         onOpenMyProfile={() => openProfileById(user.id)}
         onChangeStatus={handleChangeStatus}
         pendingFriendCount={friendsData.incomingRequests.length}
+        friends={friendsData.friends}
+        onlineUserIds={onlineUserIds}
+        activeDmFriendId={activeDmFriendId}
+        dmPopupFriendIds={dmPopupFriendIds}
+        unreadDmByFriendId={unreadDmByFriendId}
+        onSelectDmPopup={handleSelectDmPopup}
+        onDismissDmPopup={handleDismissDmPopup}
+        streamingUserIds={streamingUserIds}
         isMobileOpen={isMobileSidebarOpen}
         setIsMobileOpen={setIsMobileSidebarOpen}
         activeVoice={activeVoice}
         voiceSettings={preferences.voice}
         onToggleVoiceMute={handleToggleVoiceMute}
         onToggleVoiceDeafen={handleToggleVoiceDeafen}
+        onToggleVoiceStream={() => {
+          if (activeVoice?.isStreaming || localVideoStream) {
+            handleStopLiveStream();
+          } else {
+            setLiveModalConfig({
+              isOpen: true,
+              defaultSource: 'screen',
+              contextLabel: `Streaming in ${activeVoice?.channelName || 'Voice Channel'}`,
+              allowFeedAnnouncement: false,
+            });
+          }
+        }}
         onPttHoldStart={handlePttHoldStart}
         onPttHoldEnd={handlePttHoldEnd}
         onLeaveVoice={handleLeaveVoice}
@@ -1082,19 +1793,33 @@ export default function App() {
         }}
       />
 
-      {/* Main White / Light Gray (or Dark) Workspace */}
-      <div className="flex-1 flex flex-col min-w-0 lg:pl-[308px]">
+      {/* Main Workspace (Collapses offset to 68px on desktop when viewing a server) */}
+      <div
+        className={`flex-1 flex flex-col min-w-0 transition-all duration-200 ${
+          isFlushServerView ? 'lg:pl-[68px]' : 'lg:pl-[308px]'
+        }`}
+      >
         <TopBar
           title={getHeaderTitle()}
           activeView={activeView}
-          onOpenComposer={() => setIsComposerOpen(true)}
-          onOpenNewServer={() => setIsNewServerOpen(true)}
+          notifications={notifications}
+          onMarkAllNotificationsRead={() =>
+            setNotifications((prev) => prev.map((n) => ({ ...n, read: true })))
+          }
+          onClearNotifications={() => setNotifications([])}
+          onSelectNotification={handleSelectNotification}
           onOpenAddFriend={() => setActiveView('friends')}
           isMobileOpen={isMobileSidebarOpen}
           setIsMobileOpen={setIsMobileSidebarOpen}
         />
 
-        <main className="flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto">
+        <main
+          className={
+            isFlushServerView
+              ? 'flex-1 p-2 sm:p-4 lg:p-0 max-w-none w-full pb-16 lg:pb-0'
+              : 'flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto pb-20 lg:pb-8'
+          }
+        >
           {activeView === 'startup' && (
             <StartupPage
               user={user}
@@ -1102,6 +1827,20 @@ export default function App() {
               onNavigate={(view) => setActiveView(view)}
               onOpenMyProfile={() => openProfileById(user.id)}
               onOpenNewServer={() => setIsNewServerOpen(true)}
+            />
+          )}
+
+          {activeView === 'discover' && (
+            <DiscoverServersView
+              servers={servers}
+              serverSearch={serverSearch}
+              setServerSearch={setServerSearch}
+              onJoinServer={handleJoinServer}
+              onSelectServer={(sid) => {
+                setSelectedServerId(sid);
+                setActiveView('server');
+              }}
+              onOpenNewServerModal={() => setIsNewServerOpen(true)}
             />
           )}
 
@@ -1116,7 +1855,11 @@ export default function App() {
                     onError={(e) => {
                       (e.target as HTMLImageElement).src = makeInitialsAvatar(user.name);
                     }}
-                    className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-700 shrink-0"
+                    className={`w-10 h-10 rounded-full object-cover shrink-0 ${
+                      streamingUserIds.has(user.id)
+                        ? 'ring-2 ring-red-500 border border-zinc-950'
+                        : 'border border-zinc-200 dark:border-zinc-700'
+                    }`}
                   />
                   <div>
                     <p className="text-sm font-bold text-zinc-950 dark:text-zinc-50">
@@ -1177,6 +1920,7 @@ export default function App() {
                       key={post.id}
                       post={post}
                       currentUser={user}
+                      streamingUserIds={streamingUserIds}
                       onLike={handleLike}
                       onComment={handleComment}
                       onEditComment={handleEditComment}
@@ -1205,6 +1949,18 @@ export default function App() {
                 pendingDirection={viewedProfile.pendingDirection}
                 friendCount={viewedProfile.friendCount}
                 posts={profilePosts}
+                streamingUserIds={streamingUserIds}
+                localVideoStream={localVideoStream}
+                remoteVideoStreams={remoteVideoStreams}
+                onOpenLiveModal={() =>
+                  setLiveModalConfig({
+                    isOpen: true,
+                    defaultSource: 'camera',
+                    contextLabel: 'Facebook-Style Profile Live Stream',
+                    allowFeedAnnouncement: true,
+                  })
+                }
+                onStopLiveStream={handleStopLiveStream}
                 onProfileUpdated={(updated) => {
                   setUser(updated);
                   setViewedProfile((prev) => (prev ? { ...prev, user: updated } : null));
@@ -1237,17 +1993,35 @@ export default function App() {
             <ServerWorkspace
               server={activeServer}
               currentUser={user}
+              friendsData={friendsData}
               onlineUserIds={onlineUserIds}
+              streamingUserIds={streamingUserIds}
+              selectedChannelId={selectedChannelId}
+              onSelectChannelId={(cid) => setSelectedChannelId(cid)}
               incomingWsMessage={incomingWsMessage}
               incomingWsUpdatedMessage={incomingWsUpdatedMessage}
               incomingWsDeletedMessageId={incomingWsDeletedMessageId}
               voiceParticipants={voiceParticipantsByServer[activeServer.id] || []}
               activeVoice={activeVoice}
               voiceSettings={preferences.voice}
+              localVideoStream={localVideoStream}
+              remoteVideoStreams={remoteVideoStreams}
+              isMobileMembersOpen={isMobileMembersOpen}
+              setIsMobileMembersOpen={setIsMobileMembersOpen}
+              onOpenMobileDrawer={() => setIsMobileSidebarOpen(true)}
               onJoinVoiceChannel={handleJoinVoiceChannel}
               onLeaveVoice={handleLeaveVoice}
               onToggleVoiceMute={handleToggleVoiceMute}
               onToggleVoiceDeafen={handleToggleVoiceDeafen}
+              onStartVoiceStream={() =>
+                setLiveModalConfig({
+                  isOpen: true,
+                  defaultSource: 'screen',
+                  contextLabel: `Go Live in ${activeServer.name}`,
+                  allowFeedAnnouncement: false,
+                })
+              }
+              onStopVoiceStream={handleStopLiveStream}
               onPttHoldStart={handlePttHoldStart}
               onPttHoldEnd={handlePttHoldEnd}
               onSwitchVoiceInputMode={(mode) => {
@@ -1270,12 +2044,21 @@ export default function App() {
                 setSettingsFocusSection('voice');
                 setActiveView('settings');
               }}
+              onOpenUserSettings={() => {
+                setSettingsFocusSection('appearance');
+                setActiveView('settings');
+              }}
+              onChangeStatus={handleChangeStatus}
               onServerUpdated={(updatedSrv) => {
                 setServers((prev) =>
                   prev.map((s) => (s.id === updatedSrv.id ? { ...s, ...updatedSrv } : s))
                 );
               }}
               onOpenProfile={openProfileById}
+              onStartDm={(friendId) => {
+                handleSelectDmPopup(friendId);
+              }}
+              onSendInviteDm={handleSendInviteDm}
               onForwardMessage={(msg) => setForwardMessageTarget(msg)}
               onCreateReminder={handleCreateReminder}
               onSpeakMessage={handleSpeakMessage}
@@ -1290,8 +2073,17 @@ export default function App() {
               currentUser={user}
               friendsData={friendsData}
               onlineUserIds={onlineUserIds}
+              streamingUserIds={streamingUserIds}
               activeDmFriendId={activeDmFriendId}
-              setActiveDmFriendId={setActiveDmFriendId}
+              setActiveDmFriendId={(fid) => {
+                setActiveDmFriendId(fid);
+                if (fid) {
+                  clearDmUnread(fid);
+                  setDmPopupFriendIds((prev) => prev.filter((id) => id !== fid));
+                }
+              }}
+              unreadDmByFriendId={unreadDmByFriendId}
+              onClearDmUnread={clearDmUnread}
               incomingWsMessage={incomingWsMessage}
               incomingWsUpdatedMessage={incomingWsUpdatedMessage}
               incomingWsDeletedMessageId={incomingWsDeletedMessageId}
@@ -1334,6 +2126,79 @@ export default function App() {
         </main>
       </div>
 
+      {/* Discord-inspired Mobile Bottom Navigation Bar */}
+      <nav
+        aria-label="Mobile Navigation"
+        className="lg:hidden fixed bottom-0 inset-x-0 z-30 h-14 bg-[#09090b] border-t border-zinc-800 grid grid-cols-5 items-center px-1"
+      >
+        <button
+          type="button"
+          onClick={() => setActiveView('startup')}
+          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-semibold cursor-pointer ${
+            activeView === 'startup' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Home className="w-4 h-4" />
+          <span>Home</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveView('feed')}
+          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-semibold cursor-pointer ${
+            activeView === 'feed' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Flame className="w-4 h-4" />
+          <span>Feed</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setIsMobileSidebarOpen(true)}
+          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-semibold cursor-pointer ${
+            activeView === 'server' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Compass className="w-4 h-4" />
+          <span>Servers</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setActiveView('friends')}
+          className={`min-h-[44px] relative flex flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-semibold cursor-pointer ${
+            activeView === 'friends' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <div className="relative">
+            <Users className="w-4 h-4" />
+            {(totalUnreadDms > 0 || friendsData.incomingRequests.length > 0) && (
+              <span className="absolute -top-1.5 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center font-mono">
+                {totalUnreadDms + friendsData.incomingRequests.length > 9
+                  ? '9+'
+                  : totalUnreadDms + friendsData.incomingRequests.length}
+              </span>
+            )}
+          </div>
+          <span>DMs</span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => {
+            setSettingsFocusSection('appearance');
+            setActiveView('settings');
+          }}
+          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-semibold cursor-pointer ${
+            activeView === 'settings' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
+          }`}
+        >
+          <Settings className="w-4 h-4" />
+          <span>You</span>
+        </button>
+      </nav>
+
       {/* Modals */}
       <PostComposerModal
         isOpen={isComposerOpen}
@@ -1343,12 +2208,22 @@ export default function App() {
 
       <NewServerModal
         isOpen={isNewServerOpen}
-        onClose={() => setIsNewServerOpen(false)}
+        initialInviteCode={pendingInviteCode}
+        onClose={() => {
+          setIsNewServerOpen(false);
+          setPendingInviteCode('');
+        }}
         onServerCreated={(newSrv) => {
-          setServers((prev) => [newSrv, ...prev]);
+          setServers((prev) => {
+            const exists = prev.some((s) => s.id === newSrv.id);
+            return exists
+              ? prev.map((s) => (s.id === newSrv.id ? newSrv : s))
+              : [newSrv, ...prev];
+          });
           setSelectedServerId(newSrv.id);
           setActiveView('server');
-          showToast(`Server "${newSrv.name}" created!`);
+          setPendingInviteCode('');
+          showToast(`Joined "${newSrv.name}"!`);
         }}
       />
 
@@ -1387,6 +2262,19 @@ export default function App() {
         friends={friendsData.friends}
         onClose={() => setForwardMessageTarget(null)}
         onForwarded={(dest) => showToast(`Message forwarded to ${dest}.`)}
+      />
+
+      <LiveStreamModal
+        isOpen={liveModalConfig.isOpen}
+        defaultSource={liveModalConfig.defaultSource}
+        contextLabel={liveModalConfig.contextLabel}
+        allowFeedAnnouncement={liveModalConfig.allowFeedAnnouncement}
+        isCurrentlyStreaming={Boolean(user.isStreaming || localVideoStream)}
+        activeStreamTitle={user.streamTitle}
+        localVideoStream={localVideoStream}
+        onClose={() => setLiveModalConfig((prev) => ({ ...prev, isOpen: false }))}
+        onStartStream={handleStartLiveStream}
+        onStopStream={handleStopLiveStream}
       />
     </div>
   );

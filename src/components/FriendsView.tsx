@@ -9,6 +9,7 @@ import {
   Users,
   Pin,
   Bookmark,
+  ArrowLeft,
 } from 'lucide-react';
 import { User, ChatMessage, FriendsOverview } from '../types';
 import { api } from '../services/api';
@@ -22,8 +23,11 @@ interface FriendsViewProps {
   currentUser: User;
   friendsData: FriendsOverview & { discoverPlayers: User[] };
   onlineUserIds: string[];
+  streamingUserIds?: Set<string>;
   activeDmFriendId: string | null;
   setActiveDmFriendId: (id: string | null) => void;
+  unreadDmByFriendId?: Record<string, number>;
+  onClearDmUnread?: (friendId: string) => void;
   incomingWsMessage: ChatMessage | null;
   incomingWsUpdatedMessage: ChatMessage | null;
   incomingWsDeletedMessageId: string | null;
@@ -48,8 +52,11 @@ export const FriendsView: React.FC<FriendsViewProps> = ({
   currentUser,
   friendsData,
   onlineUserIds,
+  streamingUserIds,
   activeDmFriendId,
   setActiveDmFriendId,
+  unreadDmByFriendId = {},
+  onClearDmUnread,
   incomingWsMessage,
   incomingWsUpdatedMessage,
   incomingWsDeletedMessageId,
@@ -83,6 +90,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({
       setDmMessages([]);
       return;
     }
+    onClearDmUnread?.(activeDmFriendId);
     api.getDirectMessages(activeDmFriendId).then((res) => setDmMessages(res.messages));
   }, [activeDmFriendId]);
 
@@ -218,7 +226,11 @@ export const FriendsView: React.FC<FriendsViewProps> = ({
 
       {/* Split Workspace: Friends List + Direct Message Pane */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
-        <div className="lg:col-span-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden transition-colors">
+        <div
+          className={`lg:col-span-5 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden transition-colors ${
+            activeFriend ? 'hidden lg:block' : 'block'
+          }`}
+        >
           <div className="p-3 border-b border-zinc-200 dark:border-zinc-800 bg-zinc-50 dark:bg-zinc-950 flex items-center gap-1">
             <button
               type="button"
@@ -287,21 +299,37 @@ export const FriendsView: React.FC<FriendsViewProps> = ({
                             onError={(e) => {
                               (e.target as HTMLImageElement).src = makeInitialsAvatar(friend.name);
                             }}
-                            className="w-9 h-9 rounded-full object-cover border border-zinc-200 dark:border-zinc-700"
+                            className={`w-9 h-9 rounded-full object-cover ${
+                              friend.isStreaming || streamingUserIds?.has(friend.id)
+                                ? 'ring-2 ring-red-500 border border-zinc-950'
+                                : 'border border-zinc-200 dark:border-zinc-700'
+                            }`}
                           />
-                          <span className="absolute -bottom-0.5 -right-0.5">
-                            <StatusBadge status={effStatus} size="sm" />
-                          </span>
+                          {friend.isStreaming || streamingUserIds?.has(friend.id) ? (
+                            <span className="absolute -bottom-1 -right-1 px-1 rounded-full bg-red-600 text-white text-[8px] font-extrabold border border-white dark:border-zinc-900">
+                              LIVE
+                            </span>
+                          ) : (
+                            <span className="absolute -bottom-0.5 -right-0.5">
+                              <StatusBadge status={effStatus} size="sm" />
+                            </span>
+                          )}
                         </div>
                         <div className="min-w-0">
                           <p className="text-xs font-bold text-zinc-950 dark:text-zinc-50 truncate">
                             {friend.name}
                           </p>
                           <p className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
-                            {friend.tag} ·{' '}
-                            {effStatus === 'dnd'
-                              ? 'Do Not Disturb'
-                              : effStatus.charAt(0).toUpperCase() + effStatus.slice(1)}
+                            {friend.isStreaming || streamingUserIds?.has(friend.id) ? (
+                              <span className="text-red-500 font-sans font-semibold">Live Streaming</span>
+                            ) : (
+                              <>
+                                {friend.tag} ·{' '}
+                                {effStatus === 'dnd'
+                                  ? 'Do Not Disturb'
+                                  : effStatus.charAt(0).toUpperCase() + effStatus.slice(1)}
+                              </>
+                            )}
                           </p>
                         </div>
                       </button>
@@ -309,11 +337,19 @@ export const FriendsView: React.FC<FriendsViewProps> = ({
                       <div className="flex items-center gap-1 shrink-0">
                         <button
                           type="button"
-                          onClick={() => setActiveDmFriendId(friend.id)}
+                          onClick={() => {
+                            setActiveDmFriendId(friend.id);
+                            onClearDmUnread?.(friend.id);
+                          }}
                           title="Direct Message"
-                          className="p-2 text-zinc-600 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-200/70 dark:hover:bg-zinc-700 rounded-lg cursor-pointer"
+                          className="p-2 text-zinc-600 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white hover:bg-zinc-200/70 dark:hover:bg-zinc-700 rounded-lg cursor-pointer relative"
                         >
                           <MessageSquare className="w-4 h-4" />
+                          {(unreadDmByFriendId[friend.id] || 0) > 0 && (
+                            <span className="absolute -top-0.5 -right-0.5 min-w-[15px] h-[15px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center font-mono">
+                              {unreadDmByFriendId[friend.id]}
+                            </span>
+                          )}
                         </button>
                         <button
                           type="button"
@@ -467,37 +503,61 @@ export const FriendsView: React.FC<FriendsViewProps> = ({
         </div>
 
         {/* Direct Message Conversation Window */}
-        <div className="lg:col-span-7 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden flex flex-col h-[580px] transition-colors">
+        <div
+          className={`lg:col-span-7 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl overflow-hidden flex flex-col h-[540px] sm:h-[580px] transition-colors ${
+            activeFriend ? 'flex' : 'hidden lg:flex'
+          }`}
+        >
           {activeFriend ? (
             <>
-              <div className="h-14 px-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => onOpenProfile(activeFriend.id)}
-                  className="flex items-center gap-2.5 cursor-pointer min-w-0"
-                >
-                  <div className="relative shrink-0">
-                    <img
-                      src={activeFriend.avatarUrl}
-                      alt={activeFriend.name}
-                      onError={(e) => {
-                        (e.target as HTMLImageElement).src = makeInitialsAvatar(activeFriend.name);
-                      }}
-                      className="w-8 h-8 rounded-full object-cover border border-zinc-200 dark:border-zinc-700"
-                    />
-                    <span className="absolute -bottom-0.5 -right-0.5">
-                      <StatusBadge status={activeFriendStatus} size="sm" />
-                    </span>
-                  </div>
-                  <div className="text-left min-w-0">
-                    <p className="text-xs font-bold text-zinc-950 dark:text-zinc-50 truncate">
-                      {activeFriend.name}
-                    </p>
-                    <p className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
-                      {activeFriend.tag}
-                    </p>
-                  </div>
-                </button>
+              <div className="h-14 px-3 sm:px-5 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-2 sm:gap-3 shrink-0">
+                <div className="flex items-center gap-2 min-w-0">
+                  <button
+                    type="button"
+                    onClick={() => setActiveDmFriendId(null)}
+                    aria-label="Back to friends list"
+                    className="lg:hidden p-1.5 rounded-lg text-zinc-500 hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer shrink-0"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => onOpenProfile(activeFriend.id)}
+                    className="flex items-center gap-2.5 cursor-pointer min-w-0"
+                  >
+                    <div className="relative shrink-0">
+                      <img
+                        src={activeFriend.avatarUrl}
+                        alt={activeFriend.name}
+                        onError={(e) => {
+                          (e.target as HTMLImageElement).src = makeInitialsAvatar(activeFriend.name);
+                        }}
+                        className={`w-8 h-8 rounded-full object-cover ${
+                          activeFriend.isStreaming || streamingUserIds?.has(activeFriend.id)
+                            ? 'ring-2 ring-red-500 border border-zinc-950'
+                            : 'border border-zinc-200 dark:border-zinc-700'
+                        }`}
+                      />
+                      {activeFriend.isStreaming || streamingUserIds?.has(activeFriend.id) ? (
+                        <span className="absolute -bottom-1 -right-1 px-1 rounded-full bg-red-600 text-white text-[8px] font-extrabold border border-white dark:border-zinc-900">
+                          LIVE
+                        </span>
+                      ) : (
+                        <span className="absolute -bottom-0.5 -right-0.5">
+                          <StatusBadge status={activeFriendStatus} size="sm" />
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-left min-w-0">
+                      <p className="text-xs font-bold text-zinc-950 dark:text-zinc-50 truncate">
+                        {activeFriend.name}
+                      </p>
+                      <p className="text-[11px] font-mono text-zinc-500 dark:text-zinc-400 truncate">
+                        {activeFriend.tag}
+                      </p>
+                    </div>
+                  </button>
+                </div>
 
                 <div className="flex items-center gap-1.5 shrink-0">
                   <button
@@ -619,6 +679,7 @@ export const FriendsView: React.FC<FriendsViewProps> = ({
                       key={m.id}
                       message={m}
                       currentUserId={currentUser.id}
+                      isAuthorStreaming={Boolean(streamingUserIds?.has(m.authorId))}
                       canManageMessages={false}
                       canPinMessages={true}
                       canAddReactions={true}

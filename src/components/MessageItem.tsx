@@ -20,17 +20,22 @@ import {
   X,
   ChevronRight,
   Hash,
+  ExternalLink,
 } from 'lucide-react';
-import { ChatMessage, ServerRole } from '../types';
+import { ChatMessage, CustomEmoji, ServerRole } from '../types';
 import { formatTimeOnly } from '../utils/formatters';
 import { makeInitialsAvatar } from '../utils/avatars';
+import { parseCustomEmojiReaction } from '../utils/emojiMedia';
+import { EmojiPicker } from './EmojiPicker';
 
 const QUICK_EMOJIS = ['👍', '❤️', '🔥', '😂', '🎮', '👏', '😮', '✅'];
 
 interface MessageItemProps {
   message: ChatMessage;
   currentUserId: string;
+  isAuthorStreaming?: boolean;
   authorRoles?: ServerRole[];
+  customEmojis?: CustomEmoji[];
   canManageMessages?: boolean;
   canPinMessages?: boolean;
   canAddReactions?: boolean;
@@ -57,10 +62,81 @@ function formatAudioSeconds(sec?: number): string {
   return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+interface ParsedEmbed {
+  type: 'youtube' | 'spotify' | 'link';
+  url: string;
+  embedUrl?: string;
+  domain: string;
+}
+
+function extractEmbedsFromText(text: string): ParsedEmbed[] {
+  if (!text) return [];
+  const matches = text.match(/https?:\/\/[^\s<>()]+/gi) || [];
+  const seen = new Set<string>();
+  const results: ParsedEmbed[] = [];
+
+  for (const rawUrl of matches) {
+    const cleanUrl = rawUrl.replace(/[.,!?;:]+$/, '');
+    if (seen.has(cleanUrl)) continue;
+    seen.add(cleanUrl);
+    try {
+      const u = new URL(cleanUrl);
+      const host = u.hostname.replace(/^www\./, '').toLowerCase();
+
+      // YouTube embed detection
+      if (host === 'youtube.com' || host === 'm.youtube.com' || host === 'youtu.be') {
+        let videoId = '';
+        if (host === 'youtu.be') {
+          videoId = u.pathname.split('/').filter(Boolean)[0] || '';
+        } else if (u.pathname.startsWith('/shorts/')) {
+          videoId = u.pathname.split('/')[2] || '';
+        } else {
+          videoId = u.searchParams.get('v') || '';
+        }
+        if (videoId && /^[a-zA-Z0-9_-]{6,20}$/.test(videoId)) {
+          results.push({
+            type: 'youtube',
+            url: cleanUrl,
+            embedUrl: `https://www.youtube-nocookie.com/embed/${videoId}`,
+            domain: 'youtube.com',
+          });
+          continue;
+        }
+      }
+
+      // Spotify embed detection
+      if (host === 'open.spotify.com') {
+        const spMatch = /^\/(track|album|playlist|episode|show)\/([a-zA-Z0-9]+)/.exec(u.pathname);
+        if (spMatch) {
+          results.push({
+            type: 'spotify',
+            url: cleanUrl,
+            embedUrl: `https://open.spotify.com/embed/${spMatch[1]}/${spMatch[2]}?theme=0`,
+            domain: 'open.spotify.com',
+          });
+          continue;
+        }
+      }
+
+      results.push({
+        type: 'link',
+        url: cleanUrl,
+        domain: host,
+      });
+    } catch {
+      // Ignore invalid URL
+    }
+    if (results.length >= 2) break;
+  }
+  return results;
+}
+
 export const MessageItem: React.FC<MessageItemProps> = ({
   message,
   currentUserId,
+  isAuthorStreaming = false,
   authorRoles = [],
+  customEmojis = [],
   canManageMessages = false,
   canPinMessages = true,
   canAddReactions = true,
@@ -188,7 +264,7 @@ export const MessageItem: React.FC<MessageItemProps> = ({
         <button
           type="button"
           onClick={() => onOpenProfile(message.authorId)}
-          className="shrink-0 cursor-pointer mt-0.5"
+          className="shrink-0 cursor-pointer mt-0.5 relative"
         >
           <img
             src={message.authorAvatar}
@@ -197,8 +273,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             onError={(e) => {
               (e.target as HTMLImageElement).src = makeInitialsAvatar(message.authorName);
             }}
-            className="w-9 h-9 rounded-full object-cover border border-zinc-200 dark:border-zinc-700"
+            className={`w-9 h-9 rounded-full object-cover ${
+              isAuthorStreaming
+                ? 'ring-2 ring-red-500 border border-zinc-950'
+                : 'border border-zinc-200 dark:border-zinc-700'
+            }`}
           />
+          {isAuthorStreaming && (
+            <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 px-1 rounded-full bg-red-600 text-white text-[8px] font-extrabold border border-white dark:border-zinc-900">
+              LIVE
+            </span>
+          )}
         </button>
 
         <div className="flex-1 min-w-0">
@@ -298,11 +383,131 @@ export const MessageItem: React.FC<MessageItemProps> = ({
               </button>
             </form>
           ) : (
-            message.content && (
-              <p className="text-sm text-zinc-700 dark:text-zinc-300 mt-0.5 leading-relaxed break-words">
-                {message.content}
-              </p>
-            )
+            message.content && (() => {
+              const emojiMap = new Map<string, CustomEmoji>();
+              for (const ce of customEmojis) {
+                emojiMap.set(ce.name.toLowerCase(), ce);
+              }
+              const tokens = message.content.split(/(https?:\/\/[^\s]+|:[a-zA-Z0-9_]+:)/g);
+              const onlyCustom =
+                tokens.filter((t) => t.trim().length > 0).length > 0 &&
+                tokens
+                  .filter((t) => t.trim().length > 0)
+                  .every((t) => {
+                    const m = /^:([a-zA-Z0-9_]+):$/.exec(t);
+                    return Boolean(m && emojiMap.has(m[1].toLowerCase()));
+                  });
+              const embeds = extractEmbedsFromText(message.content);
+
+              return (
+                <div className="space-y-2">
+                  <p className="text-sm text-zinc-700 dark:text-zinc-300 mt-0.5 leading-relaxed break-words">
+                    {tokens.map((part, idx) => {
+                      if (/^https?:\/\/[^\s]+$/i.test(part)) {
+                        return (
+                          <a
+                            key={idx}
+                            href={part}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="text-indigo-600 dark:text-indigo-400 hover:underline break-all"
+                          >
+                            {part}
+                          </a>
+                        );
+                      }
+                      const scMatch = /^:([a-zA-Z0-9_]+):$/.exec(part);
+                      if (scMatch) {
+                        const found = emojiMap.get(scMatch[1].toLowerCase());
+                        if (found) {
+                          return (
+                            <img
+                              key={idx}
+                              src={found.url}
+                              alt={part}
+                              title={part}
+                              className={`inline-block align-middle object-contain mx-0.5 ${
+                                onlyCustom ? 'w-10 h-10' : 'w-5 h-5'
+                              }`}
+                            />
+                          );
+                        }
+                      }
+                      return <React.Fragment key={idx}>{part}</React.Fragment>;
+                    })}
+                  </p>
+
+                  {embeds.map((emb) => {
+                    if (emb.type === 'youtube' && emb.embedUrl) {
+                      return (
+                        <div
+                          key={emb.url}
+                          className="max-w-md rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950"
+                        >
+                          <div className="px-3 py-1.5 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between text-[11px] text-zinc-300">
+                            <span className="font-semibold">YouTube Embed</span>
+                            <a
+                              href={emb.url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-zinc-400 hover:text-white flex items-center gap-1"
+                            >
+                              <ExternalLink className="w-3 h-3" />
+                              <span>Open</span>
+                            </a>
+                          </div>
+                          <div className="aspect-video w-full">
+                            <iframe
+                              src={emb.embedUrl}
+                              title="YouTube video player"
+                              allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                              allowFullScreen
+                              className="w-full h-full border-0"
+                            />
+                          </div>
+                        </div>
+                      );
+                    }
+                    if (emb.type === 'spotify' && emb.embedUrl) {
+                      return (
+                        <div
+                          key={emb.url}
+                          className="max-w-md rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-zinc-950"
+                        >
+                          <iframe
+                            src={emb.embedUrl}
+                            title="Spotify embed"
+                            height="152"
+                            allow="autoplay; clipboard-write; encrypted-media; fullscreen; picture-in-picture"
+                            loading="lazy"
+                            className="w-full border-0"
+                          />
+                        </div>
+                      );
+                    }
+                    return (
+                      <a
+                        key={emb.url}
+                        href={emb.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="max-w-md flex items-center justify-between gap-3 p-2.5 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 hover:border-zinc-400 dark:hover:border-zinc-600 transition-colors"
+                      >
+                        <div className="min-w-0">
+                          <p className="text-[10px] font-bold uppercase tracking-wider text-zinc-400">
+                            {emb.domain}
+                          </p>
+                          <p className="text-xs font-medium text-indigo-600 dark:text-indigo-400 truncate">
+                            {emb.url}
+                          </p>
+                        </div>
+                        <ExternalLink className="w-3.5 h-3.5 text-zinc-400 shrink-0" />
+                      </a>
+                    );
+                  })}
+                </div>
+              );
+            })()
           )}
 
           {/* Image / Animated GIF Attachment */}
@@ -313,6 +518,19 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                 alt={message.attachmentName || 'Chat attachment'}
                 onClick={() => setLightboxOpen(true)}
                 className="max-h-72 rounded-xl border border-zinc-200 dark:border-zinc-800 object-contain bg-zinc-100 dark:bg-zinc-950 cursor-zoom-in"
+              />
+            </div>
+          )}
+
+          {/* Video Attachment */}
+          {message.attachmentUrl && message.attachmentType === 'video' && (
+            <div className="mt-2 max-w-md rounded-xl overflow-hidden border border-zinc-200 dark:border-zinc-800 bg-black">
+              <video
+                src={message.attachmentUrl}
+                controls
+                playsInline
+                preload="metadata"
+                className="max-h-80 w-full bg-black"
               />
             </div>
           )}
@@ -391,19 +609,29 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
               {reactionEntries.map(([emoji, userIds]) => {
                 const reactedByMe = userIds.includes(currentUserId);
+                const parsedCustom = parseCustomEmojiReaction(emoji);
                 return (
                   <button
                     key={emoji}
                     type="button"
                     disabled={!canAddReactions}
                     onClick={() => onReact(message.id, emoji)}
+                    title={parsedCustom ? `:${parsedCustom.name}:` : emoji}
                     className={`px-2 py-0.5 rounded-lg text-xs flex items-center gap-1 border transition-colors cursor-pointer ${
                       reactedByMe
                         ? 'bg-zinc-950 text-white border-zinc-950 dark:bg-white dark:text-zinc-950 dark:border-white'
                         : 'bg-zinc-100 dark:bg-zinc-800 text-zinc-800 dark:text-zinc-200 border-zinc-200 dark:border-zinc-700 hover:border-zinc-400'
                     }`}
                   >
-                    <span>{emoji}</span>
+                    {parsedCustom ? (
+                      <img
+                        src={parsedCustom.url}
+                        alt={`:${parsedCustom.name}:`}
+                        className="w-4 h-4 object-contain"
+                      />
+                    ) : (
+                      <span>{emoji}</span>
+                    )}
                     <span className="font-mono text-[11px] tabular-nums">{userIds.length}</span>
                   </button>
                 );
@@ -465,28 +693,23 @@ export const MessageItem: React.FC<MessageItemProps> = ({
             <MoreHorizontal className="w-3.5 h-3.5" />
           </button>
 
-          {/* Quick Emoji Picker */}
+          {/* Full Upward-Opening Emoji Picker */}
           {emojiMenuOpen && (
-            <div className="absolute right-0 top-9 z-40 bg-zinc-950 dark:bg-zinc-900 border border-zinc-800 rounded-xl shadow-2xl p-1.5 flex items-center gap-1">
-              {QUICK_EMOJIS.map((em) => (
-                <button
-                  key={em}
-                  type="button"
-                  onClick={() => {
-                    onReact(message.id, em);
-                    setEmojiMenuOpen(false);
-                  }}
-                  className="w-7 h-7 rounded-lg hover:bg-zinc-800 flex items-center justify-center text-sm cursor-pointer"
-                >
-                  {em}
-                </button>
-              ))}
+            <div className="absolute right-0 bottom-full mb-1.5 z-50">
+              <EmojiPicker
+                customEmojis={customEmojis}
+                onSelectEmoji={(tok) => {
+                  onReact(message.id, tok);
+                  setEmojiMenuOpen(false);
+                }}
+                onClose={() => setEmojiMenuOpen(false)}
+              />
             </div>
           )}
 
-          {/* Full Discord-style Message Action Menu */}
+          {/* Full Discord-style Upward-Opening Message Action Menu */}
           {menuOpen && (
-            <div className="absolute right-0 top-9 z-50 w-56 bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl shadow-2xl py-1.5 text-xs">
+            <div className="absolute right-0 bottom-full mb-1.5 z-50 w-56 max-h-[65vh] overflow-y-auto bg-zinc-950 text-zinc-100 border border-zinc-800 rounded-xl shadow-2xl py-1.5 text-xs">
               {canAddReactions && (
                 <div className="px-2 pb-1.5 mb-1 border-b border-zinc-800">
                   <div className="flex items-center justify-between px-1.5 py-1 text-[11px] text-zinc-400">
@@ -494,6 +717,17 @@ export const MessageItem: React.FC<MessageItemProps> = ({
                       <SmilePlus className="w-3.5 h-3.5" />
                       Add Reaction
                     </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setMenuOpen(false);
+                        setEmojiMenuOpen(true);
+                      }}
+                      title="Open all emojis"
+                      className="text-[11px] font-bold text-zinc-300 hover:text-white px-1.5 py-0.5 rounded bg-zinc-800 cursor-pointer"
+                    >
+                      + More
+                    </button>
                   </div>
                   <div className="flex items-center justify-between gap-0.5 mt-1">
                     {QUICK_EMOJIS.slice(0, 6).map((em) => (

@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import express from 'express';
 import type { Request, Response, NextFunction } from 'express';
 import http from 'http';
@@ -9,6 +10,8 @@ import jwt from 'jsonwebtoken';
 import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { fileURLToPath } from 'url';
+import nodemailer from 'nodemailer';
+import { getGifBytesById, searchBuiltInGifs } from './src/utils/gifLibrary';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -36,8 +39,16 @@ export interface StoredUser {
   birthDate?: string;
   squadTitle?: string;
   status?: UserStatus;
+  isStreaming?: boolean;
+  streamTitle?: string;
   blockedUserIds: string[];
   createdAt: string;
+}
+
+export interface ChannelCategory {
+  id: string;
+  name: string;
+  collapsed?: boolean;
 }
 
 export interface Channel {
@@ -45,6 +56,26 @@ export interface Channel {
   name: string;
   type: 'text' | 'voice';
   topic?: string;
+  categoryId?: string;
+}
+
+export interface CustomEmoji {
+  id: string;
+  name: string;
+  url: string;
+  animated: boolean;
+  uploadedBy: string;
+  createdAt: string;
+}
+
+export interface ServerInvite {
+  code: string;
+  createdBy: string;
+  createdByName: string;
+  uses: number;
+  maxUses?: number;
+  expiresAt?: string;
+  createdAt: string;
 }
 
 export interface RolePermissions {
@@ -75,12 +106,18 @@ export interface Server {
   description: string;
   category: string;
   iconUrl?: string;
+  bannerUrl?: string;
   iconStyle?: string;
   ownerId: string;
   memberIds: string[];
+  categories?: ChannelCategory[];
   channels: Channel[];
   roles?: ServerRole[];
   memberRoles?: Record<string, string[]>;
+  customEmojis?: CustomEmoji[];
+  invites?: ServerInvite[];
+  bannedUserIds?: string[];
+  timedOutUntil?: Record<string, string>;
   createdAt: string;
 }
 
@@ -133,6 +170,8 @@ export interface VoiceParticipant {
   muted: boolean;
   deafened: boolean;
   speaking: boolean;
+  isStreaming?: boolean;
+  streamTitle?: string;
 }
 
 export interface PostComment {
@@ -366,7 +405,17 @@ function ensureServerDefaults(srv: Server): Server {
     ...ch,
     type: ch.type === 'voice' ? ('voice' as const) : ('text' as const),
   }));
-  return { ...srv, roles, memberRoles, channels };
+  return {
+    ...srv,
+    roles,
+    memberRoles,
+    channels,
+    categories: srv.categories || [],
+    customEmojis: srv.customEmojis || [],
+    invites: srv.invites || [],
+    bannedUserIds: srv.bannedUserIds || [],
+    timedOutUntil: srv.timedOutUntil || {},
+  };
 }
 
 function hasServerPermission(srv: Server, userId: string, perm: keyof RolePermissions): boolean {
@@ -882,14 +931,36 @@ async function startServer() {
       activeSockets.get(userId)!.add(ws);
       broadcastPresence();
 
+      // Send initial voice participant snapshot for all servers this user belongs to
+      const initialDb = readDB();
+      for (const s of initialDb.servers) {
+        if (s.memberIds.includes(userId)) {
+          const participants = getServerVoiceParticipants(s.id);
+          if (ws.readyState === WebSocket.OPEN) {
+            ws.send(
+              JSON.stringify({
+                type: 'voice:participants',
+                serverId: s.id,
+                participants,
+              })
+            );
+          }
+        }
+      }
+
       ws.on('message', (raw) => {
         try {
           const msg = JSON.parse(raw.toString());
           if (msg.type === 'voice:join' && msg.serverId && msg.channelId) {
             const db = readDB();
             const user = db.users.find((u) => u.id === userId);
-            const srv = db.servers.find((s) => s.id === msg.serverId);
-            if (!user || !srv || !hasServerPermission(srv, userId, 'connectVoice')) return;
+            const rawSrv = db.servers.find((s) => s.id === msg.serverId);
+            if (!user || !rawSrv) return;
+            const srv = ensureServerDefaults(rawSrv);
+            if (srv.bannedUserIds?.includes(userId)) return;
+            const timeoutIso = srv.timedOutUntil?.[userId];
+            if (timeoutIso && new Date(timeoutIso).getTime() > Date.now()) return;
+            if (!hasServerPermission(srv, userId, 'connectVoice')) return;
 
             const prevServerId = removeUserFromVoice(userId);
             if (prevServerId && prevServerId !== srv.id) {
@@ -908,6 +979,8 @@ async function startServer() {
               muted: Boolean(msg.muted),
               deafened: Boolean(msg.deafened),
               speaking: false,
+              isStreaming: Boolean(msg.isStreaming),
+              streamTitle: typeof msg.streamTitle === 'string' ? msg.streamTitle : undefined,
             });
             broadcastVoiceForServer(srv.id);
           } else if (msg.type === 'voice:leave') {
@@ -920,6 +993,10 @@ async function startServer() {
                 if (typeof msg.muted === 'boolean') p.muted = msg.muted;
                 if (typeof msg.deafened === 'boolean') p.deafened = msg.deafened;
                 if (typeof msg.speaking === 'boolean') p.speaking = msg.speaking;
+                if (typeof msg.isStreaming === 'boolean') p.isStreaming = msg.isStreaming;
+                if (typeof msg.streamTitle === 'string' || msg.streamTitle === null) {
+                  p.streamTitle = msg.streamTitle || undefined;
+                }
                 broadcastVoiceForServer(p.serverId);
                 break;
               }
@@ -945,6 +1022,19 @@ async function startServer() {
             activeSockets.delete(userId);
             const leftServerId = removeUserFromVoice(userId);
             if (leftServerId) broadcastVoiceForServer(leftServerId);
+            const closeDb = readDB();
+            const u = closeDb.users.find((usr) => usr.id === userId);
+            if (u && u.isStreaming) {
+              u.isStreaming = false;
+              u.streamTitle = undefined;
+              writeDB(closeDb);
+              broadcastToAll({
+                type: 'presence:stream',
+                userId,
+                isStreaming: false,
+                streamTitle: undefined,
+              });
+            }
           }
         }
         broadcastPresence();
@@ -954,10 +1044,61 @@ async function startServer() {
     }
   });
 
-  // --- HEALTH & AUTH ROUTES ---
+  // --- HEALTH, GIFS & AUTH ROUTES ---
 
   app.get('/api/health', (_req: Request, res: Response) => {
     return res.json({ ok: true });
+  });
+
+  app.get('/api/gifs/asset/:id', (req: Request, res: Response) => {
+    const rawId = req.params.id.replace(/\.gif$/i, '');
+    const bytes = getGifBytesById(rawId);
+    if (!bytes) {
+      return res.status(404).json({ error: 'GIF not found.' });
+    }
+    res.setHeader('Content-Type', 'image/gif');
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    return res.send(Buffer.from(bytes));
+  });
+
+  app.get('/api/gifs', async (req: Request, res: Response) => {
+    const q = String(req.query.q || '').trim();
+    const category = String(req.query.category || 'All').trim();
+    const tenorKey = process.env.TENOR_API_KEY;
+    if (tenorKey) {
+      try {
+        const searchTerm = q || (category !== 'All' ? category : 'trending');
+        const endpoint =
+          searchTerm === 'trending'
+            ? `https://tenor.googleapis.com/v2/featured?key=${encodeURIComponent(tenorKey)}&limit=24&media_filter=gif,tinygif`
+            : `https://tenor.googleapis.com/v2/search?q=${encodeURIComponent(searchTerm)}&key=${encodeURIComponent(tenorKey)}&limit=24&media_filter=gif,tinygif`;
+        const tenorRes = await fetch(endpoint);
+        if (tenorRes.ok) {
+          const data = (await tenorRes.json()) as {
+            results?: Array<{
+              id: string;
+              content_description?: string;
+              media_formats?: { gif?: { url: string }; tinygif?: { url: string } };
+            }>;
+          };
+          if (Array.isArray(data.results) && data.results.length > 0) {
+            const gifs = data.results
+              .map((r) => ({
+                id: `tenor_${r.id}`,
+                title: r.content_description || 'GIF',
+                category: category || 'Trending',
+                tags: (r.content_description || '').toLowerCase().split(/\s+/).filter(Boolean),
+                url: r.media_formats?.gif?.url || r.media_formats?.tinygif?.url || '',
+              }))
+              .filter((g) => Boolean(g.url));
+            if (gifs.length > 0) return res.json({ gifs });
+          }
+        }
+      } catch {
+        // Fall back to local animated GIF catalog
+      }
+    }
+    return res.json({ gifs: searchBuiltInGifs(q, category, true) });
   });
 
   app.post('/api/auth/register', upload.single('avatar'), async (req: Request, res: Response) => {
@@ -1127,11 +1268,25 @@ async function startServer() {
         attempts: 0,
       });
 
-      const resendKey = process.env.RESEND_API_KEY;
+      const appUrl = process.env.APP_URL || 'http://localhost:3000';
+      const verifyUrl = `${appUrl}/?emailToken=${encodeURIComponent(magicToken)}`;
+      const emailSubject = `Your Pilgrim sign-in code: ${code}`;
+      const emailHtml = `
+        <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#09090b;color:#ffffff;border-radius:16px;">
+          <h2 style="margin:0 0 12px 0;font-size:20px;">Pilgrim Sign-In Verification</h2>
+          <p style="color:#d4d4d8;font-size:14px;line-height:1.5;">Hi ${user.name}, use the 6-digit verification code below to sign in to Pilgrim. This code expires in 10 minutes.</p>
+          <div style="margin:20px 0;padding:16px;background:#18181b;border-radius:12px;text-align:center;font-family:monospace;font-size:28px;font-weight:700;letter-spacing:6px;color:#ffffff;">
+            ${code}
+          </div>
+          <p style="color:#a1a1aa;font-size:12px;">Or <a href="${verifyUrl}" style="color:#ffffff;">click here to verify your email sign-in</a>.</p>
+          <p style="color:#71717a;font-size:11px;margin-top:20px;">If you did not request this code, you can safely ignore this email.</p>
+        </div>
+      `;
+
+      let delivered = false;
+      const resendKey = process.env.RESEND_API_KEY?.trim();
       if (resendKey) {
         try {
-          const appUrl = process.env.APP_URL || 'http://localhost:3000';
-          const verifyUrl = `${appUrl}/?emailToken=${encodeURIComponent(magicToken)}`;
           const mailRes = await fetch('https://api.resend.com/emails', {
             method: 'POST',
             headers: {
@@ -1141,27 +1296,61 @@ async function startServer() {
             body: JSON.stringify({
               from: process.env.EMAIL_FROM || 'Pilgrim <onboarding@resend.dev>',
               to: [normalizedEmail],
-              subject: `Your Pilgrim sign-in code: ${code}`,
-              html: `<p>Hi ${user.name},</p><p>Your Pilgrim sign-in code is <strong>${code}</strong> (expires in 10 minutes).</p><p><a href="${verifyUrl}">Or click here to sign in directly</a></p>`,
+              subject: emailSubject,
+              html: emailHtml,
             }),
           });
           if (mailRes.ok) {
-            return res.json({
-              sent: true,
-              deliveryMode: 'email',
-              expiresInSeconds: 600,
-            });
+            delivered = true;
+          } else {
+            const errBody = await mailRes.text().catch(() => '');
+            console.error('Resend API rejected email:', mailRes.status, errBody);
           }
-        } catch {
-          // Fall back cleanly to preview delivery if email relay fails
+        } catch (err) {
+          console.error('Resend email delivery error:', err);
         }
+      }
+
+      const smtpUser = (process.env.SMTP_USER || process.env.EMAIL_USER)?.trim();
+      const smtpPass = (process.env.SMTP_PASS || process.env.EMAIL_PASS)?.trim();
+      const smtpHost = (process.env.SMTP_HOST || (smtpUser && smtpPass ? 'smtp.gmail.com' : ''))?.trim();
+      if (!delivered && smtpHost && smtpUser && smtpPass) {
+        try {
+          const port = Number(process.env.SMTP_PORT || 587);
+          const transporter = nodemailer.createTransport({
+            host: smtpHost,
+            port,
+            secure: port === 465,
+            auth: {
+              user: smtpUser,
+              pass: smtpPass,
+            },
+          });
+          await transporter.sendMail({
+            from: process.env.EMAIL_FROM || `Pilgrim <${smtpUser}>`,
+            to: normalizedEmail,
+            subject: emailSubject,
+            text: `Hi ${user.name}, your Pilgrim sign-in code is ${code} (expires in 10 minutes).`,
+            html: emailHtml,
+          });
+          delivered = true;
+        } catch (err) {
+          console.error('SMTP email delivery error:', err);
+        }
+      }
+
+      if (!delivered) {
+        emailLoginChallenges.delete(normalizedEmail);
+        return res.status(503).json({
+          emailDeliveryUnconfigured: true,
+          error:
+            'Email delivery is not configured on the server yet. Add RESEND_API_KEY or SMTP_USER & SMTP_PASS in Secrets to send login codes to your inbox, or sign in with your password.',
+        });
       }
 
       return res.json({
         sent: true,
-        deliveryMode: 'preview',
-        previewCode: code,
-        magicToken,
+        deliveryMode: 'email',
         expiresInSeconds: 600,
       });
     } catch (err) {
@@ -1271,6 +1460,37 @@ async function startServer() {
       type: 'presence:status',
       userId: user.id,
       status: status === 'invisible' ? 'offline' : status,
+    });
+    return res.json({ user: sanitizeUser(user) });
+  });
+
+  app.patch('/api/users/me/stream', authMiddleware, (req: AuthRequest, res: Response) => {
+    const { isStreaming, streamTitle } = req.body || {};
+    const db = readDB();
+    const user = db.users.find((u) => u.id === req.user!.id);
+    if (!user) return res.status(404).json({ error: 'User not found.' });
+
+    user.isStreaming = Boolean(isStreaming);
+    user.streamTitle =
+      user.isStreaming && typeof streamTitle === 'string' && streamTitle.trim()
+        ? streamTitle.trim().slice(0, 120)
+        : undefined;
+    writeDB(db);
+
+    for (const room of voiceChannels.values()) {
+      const p = room.get(user.id);
+      if (p) {
+        p.isStreaming = user.isStreaming;
+        p.streamTitle = user.streamTitle;
+        broadcastVoiceForServer(p.serverId);
+      }
+    }
+
+    broadcastToAll({
+      type: 'presence:stream',
+      userId: user.id,
+      isStreaming: user.isStreaming,
+      streamTitle: user.streamTitle,
     });
     return res.json({ user: sanitizeUser(user) });
   });
@@ -1436,11 +1656,12 @@ async function startServer() {
       id: serverId,
       name: name.trim(),
       description: description?.trim() || 'A Pilgrim community server.',
-      category: category?.trim() || 'Community & Hangout',
+      category: category?.trim() || 'Community',
       iconUrl: req.file ? `/uploads/${req.file.filename}` : undefined,
       iconStyle: iconStyle || 'shield',
       ownerId: userId,
       memberIds: [userId],
+      categories: [],
       channels: [
         { id: `ch_${Date.now()}_1`, name: 'general', type: 'text', topic: `Welcome to ${name.trim()}!` },
         { id: `ch_${Date.now()}_2`, name: 'media-showcase', type: 'text', topic: 'Share clips, images, and updates' },
@@ -1450,6 +1671,10 @@ async function startServer() {
       memberRoles: {
         [userId]: [roles[0].id],
       },
+      customEmojis: [],
+      invites: [],
+      bannedUserIds: [],
+      timedOutUntil: {},
       createdAt: new Date().toISOString(),
     };
 
@@ -1462,11 +1687,64 @@ async function startServer() {
     });
   });
 
+  app.patch(
+    '/api/servers/:id',
+    authMiddleware,
+    upload.fields([
+      { name: 'icon', maxCount: 1 },
+      { name: 'banner', maxCount: 1 },
+    ]),
+    (req: AuthRequest, res: Response) => {
+      const db = readDB();
+      const rawSrv = db.servers.find((s) => s.id === req.params.id);
+      if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+      const srv = ensureServerDefaults(rawSrv);
+
+      if (!hasServerPermission(srv, req.user!.id, 'manageServer')) {
+        return res.status(403).json({ error: 'Only server managers or owners can update server settings.' });
+      }
+
+      const { name, description, iconStyle, removeIcon, removeBanner } = req.body || {};
+      if (name && typeof name === 'string' && name.trim()) srv.name = name.trim();
+      if (description !== undefined && typeof description === 'string') srv.description = description.trim();
+      if (iconStyle && typeof iconStyle === 'string') srv.iconStyle = iconStyle;
+
+      const files = req.files as { [fieldname: string]: Express.Multer.File[] } | undefined;
+      const iconFile = files?.icon?.[0];
+      const bannerFile = files?.banner?.[0];
+
+      if (iconFile) {
+        srv.iconUrl = `/uploads/${iconFile.filename}`;
+      } else if (removeIcon === 'true') {
+        srv.iconUrl = undefined;
+      }
+
+      if (bannerFile) {
+        srv.bannerUrl = `/uploads/${bannerFile.filename}`;
+      } else if (removeBanner === 'true') {
+        srv.bannerUrl = undefined;
+      }
+
+      const idx = db.servers.findIndex((s) => s.id === srv.id);
+      if (idx !== -1) db.servers[idx] = srv;
+      writeDB(db);
+
+      broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+      return res.json({
+        server: { ...srv, isMember: srv.memberIds.includes(req.user!.id), memberCount: srv.memberIds.length },
+      });
+    }
+  );
+
   app.post('/api/servers/:id/join', authMiddleware, (req: AuthRequest, res: Response) => {
     const db = readDB();
     const rawSrv = db.servers.find((s) => s.id === req.params.id);
     if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
     const srv = ensureServerDefaults(rawSrv);
+
+    if (srv.bannedUserIds?.includes(req.user!.id)) {
+      return res.status(403).json({ error: 'You are banned from joining this server.' });
+    }
 
     if (!srv.memberIds.includes(req.user!.id)) {
       srv.memberIds.push(req.user!.id);
@@ -1475,13 +1753,80 @@ async function startServer() {
     if (idx !== -1) db.servers[idx] = srv;
     writeDB(db);
 
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
     return res.json({
       server: { ...srv, isMember: true, memberCount: srv.memberIds.length },
     });
   });
 
+  // --- CATEGORIES ---
+  app.post('/api/servers/:id/categories', authMiddleware, (req: AuthRequest, res: Response) => {
+    const { name } = req.body || {};
+    if (!name || typeof name !== 'string' || !name.trim()) {
+      return res.status(400).json({ error: 'Category name is required.' });
+    }
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (!hasServerPermission(srv, req.user!.id, 'manageChannels')) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    const category: ChannelCategory = {
+      id: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+      name: name.trim(),
+      collapsed: false,
+    };
+    srv.categories = [...(srv.categories || []), category];
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.status(201).json({ category, server: srv });
+  });
+
+  app.patch('/api/servers/:id/categories/:catId', authMiddleware, (req: AuthRequest, res: Response) => {
+    const { name, collapsed } = req.body || {};
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (!hasServerPermission(srv, req.user!.id, 'manageChannels')) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    const cat = (srv.categories || []).find((c) => c.id === req.params.catId);
+    if (!cat) return res.status(404).json({ error: 'Category not found.' });
+    if (name && typeof name === 'string' && name.trim()) cat.name = name.trim();
+    if (typeof collapsed === 'boolean') cat.collapsed = collapsed;
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ category: cat, server: srv });
+  });
+
+  app.delete('/api/servers/:id/categories/:catId', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (!hasServerPermission(srv, req.user!.id, 'manageChannels')) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    srv.categories = (srv.categories || []).filter((c) => c.id !== req.params.catId);
+    srv.channels = srv.channels.map((ch) =>
+      ch.categoryId === req.params.catId ? { ...ch, categoryId: undefined } : ch
+    );
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ server: srv });
+  });
+
+  // --- CHANNELS ---
   app.post('/api/servers/:id/channels', authMiddleware, (req: AuthRequest, res: Response) => {
-    const { name, topic, type = 'text' } = req.body;
+    const { name, topic, type = 'text', categoryId } = req.body;
     if (!name || typeof name !== 'string' || !name.trim()) {
       return res.status(400).json({ error: 'Channel name is required.' });
     }
@@ -1512,6 +1857,7 @@ async function startServer() {
       name: cleanName || (channelType === 'voice' ? 'Voice Room' : 'new-channel'),
       type: channelType,
       topic: topic?.trim() || '',
+      categoryId: categoryId || undefined,
     };
 
     srv.channels.push(channel);
@@ -1523,6 +1869,223 @@ async function startServer() {
     return res.status(201).json({ channel, server: srv });
   });
 
+  app.patch('/api/servers/:id/channels/:channelId', authMiddleware, (req: AuthRequest, res: Response) => {
+    const { name, topic, categoryId } = req.body || {};
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (!hasServerPermission(srv, req.user!.id, 'manageChannels')) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    const ch = srv.channels.find((c) => c.id === req.params.channelId);
+    if (!ch) return res.status(404).json({ error: 'Channel not found.' });
+    if (name && typeof name === 'string' && name.trim()) {
+      ch.name =
+        ch.type === 'voice'
+          ? name.trim()
+          : name.toLowerCase().trim().replace(/\s+/g, '-').replace(/[^a-z0-9-_]/g, '') || ch.name;
+    }
+    if (topic !== undefined) ch.topic = String(topic).trim();
+    if (categoryId !== undefined) ch.categoryId = categoryId || undefined;
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ channel: ch, server: srv });
+  });
+
+  app.delete('/api/servers/:id/channels/:channelId', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (!hasServerPermission(srv, req.user!.id, 'manageChannels')) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    srv.channels = srv.channels.filter((c) => c.id !== req.params.channelId);
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ server: srv });
+  });
+
+  // --- UNLIMITED CUSTOM EMOJIS (STATIC 128x128 & ANIMATED GIF) ---
+  app.post('/api/servers/:id/emojis', authMiddleware, upload.single('emoji'), (req: AuthRequest, res: Response) => {
+    const file = req.file;
+    if (!file) {
+      return res.status(400).json({ error: 'Please select an emoji image or GIF file.' });
+    }
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (
+      !hasServerPermission(srv, req.user!.id, 'manageServer') &&
+      !hasServerPermission(srv, req.user!.id, 'manageRoles')
+    ) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+
+    const rawName = String(req.body?.name || file.originalname.replace(/\.[^.]+$/, ''));
+    const cleanName =
+      rawName
+        .trim()
+        .toLowerCase()
+        .replace(/[^a-z0-9_]/g, '_')
+        .replace(/^_+|_+$/g, '') || `emoji_${Date.now().toString().slice(-4)}`;
+    const animated =
+      req.body?.animated === 'true' ||
+      file.mimetype === 'image/gif' ||
+      /\.gif$/i.test(file.originalname);
+
+    const emoji: CustomEmoji = {
+      id: `ce_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
+      name: cleanName,
+      url: `/uploads/${file.filename}`,
+      animated,
+      uploadedBy: req.user!.id,
+      createdAt: new Date().toISOString(),
+    };
+    srv.customEmojis = [...(srv.customEmojis || []), emoji];
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.status(201).json({ emoji, server: srv });
+  });
+
+  app.delete('/api/servers/:id/emojis/:emojiId', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (
+      !hasServerPermission(srv, req.user!.id, 'manageServer') &&
+      !hasServerPermission(srv, req.user!.id, 'manageRoles')
+    ) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    srv.customEmojis = (srv.customEmojis || []).filter((e) => e.id !== req.params.emojiId);
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ server: srv });
+  });
+
+  // --- SERVER INVITE LINKS ---
+  app.post('/api/servers/:id/invites', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (!srv.memberIds.includes(req.user!.id)) {
+      return res.status(403).json({ error: 'You must be a member to create invites.' });
+    }
+
+    const { maxUses, maxAgeHours } = req.body || {};
+    const code = crypto.randomBytes(4).toString('hex').toUpperCase();
+    const parsedMaxUses = Number(maxUses);
+    const parsedHours = Number(maxAgeHours);
+    const invite: ServerInvite = {
+      code,
+      createdBy: req.user!.id,
+      createdByName: req.user!.name,
+      uses: 0,
+      maxUses: parsedMaxUses > 0 ? parsedMaxUses : undefined,
+      expiresAt: parsedHours > 0 ? new Date(Date.now() + parsedHours * 3600 * 1000).toISOString() : undefined,
+      createdAt: new Date().toISOString(),
+    };
+    srv.invites = [invite, ...(srv.invites || [])];
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.status(201).json({ invite, server: srv });
+  });
+
+  app.delete('/api/servers/:id/invites/:code', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    const inv = (srv.invites || []).find((i) => i.code === req.params.code);
+    if (!inv) return res.status(404).json({ error: 'Invite not found.' });
+    if (inv.createdBy !== req.user!.id && !hasServerPermission(srv, req.user!.id, 'manageServer')) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    srv.invites = (srv.invites || []).filter((i) => i.code !== req.params.code);
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ server: srv });
+  });
+
+  app.get('/api/invites/:code', (req: Request, res: Response) => {
+    const code = req.params.code.trim().toUpperCase();
+    const db = readDB();
+    for (const rawSrv of db.servers) {
+      const srv = ensureServerDefaults(rawSrv);
+      const inv = (srv.invites || []).find((i) => i.code.toUpperCase() === code);
+      if (inv) {
+        if (inv.expiresAt && new Date(inv.expiresAt).getTime() < Date.now()) {
+          return res.status(410).json({ error: 'This invite link has expired.' });
+        }
+        if (inv.maxUses && inv.uses >= inv.maxUses) {
+          return res.status(410).json({ error: 'This invite link has reached its maximum uses.' });
+        }
+        return res.json({
+          invite: inv,
+          server: {
+            id: srv.id,
+            name: srv.name,
+            description: srv.description,
+            iconUrl: srv.iconUrl,
+            bannerUrl: srv.bannerUrl,
+            iconStyle: srv.iconStyle,
+            memberCount: srv.memberIds.length,
+          },
+        });
+      }
+    }
+    return res.status(404).json({ error: 'Invalid or expired invite code.' });
+  });
+
+  app.post('/api/invites/:code/join', authMiddleware, (req: AuthRequest, res: Response) => {
+    const code = req.params.code.trim().toUpperCase();
+    const db = readDB();
+    for (let i = 0; i < db.servers.length; i++) {
+      const srv = ensureServerDefaults(db.servers[i]);
+      const inv = (srv.invites || []).find((item) => item.code.toUpperCase() === code);
+      if (inv) {
+        if (srv.bannedUserIds?.includes(req.user!.id)) {
+          return res.status(403).json({ error: 'You are banned from this server.' });
+        }
+        if (inv.expiresAt && new Date(inv.expiresAt).getTime() < Date.now()) {
+          return res.status(410).json({ error: 'This invite link has expired.' });
+        }
+        if (inv.maxUses && inv.uses >= inv.maxUses) {
+          return res.status(410).json({ error: 'This invite link has reached its maximum uses.' });
+        }
+        inv.uses += 1;
+        if (!srv.memberIds.includes(req.user!.id)) {
+          srv.memberIds.push(req.user!.id);
+        }
+        db.servers[i] = srv;
+        writeDB(db);
+        broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+        return res.json({
+          server: { ...srv, isMember: true, memberCount: srv.memberIds.length },
+        });
+      }
+    }
+    return res.status(404).json({ error: 'Invalid or expired invite code.' });
+  });
+
+  // --- ROLES & MODERATION ---
   app.post('/api/servers/:id/roles', authMiddleware, (req: AuthRequest, res: Response) => {
     const { name, color = '#e4e4e7', permissions } = req.body;
     if (!name || typeof name !== 'string' || !name.trim()) {
@@ -1636,6 +2199,87 @@ async function startServer() {
     return res.json({ server: srv });
   });
 
+  app.post('/api/servers/:id/members/:userId/timeout', authMiddleware, (req: AuthRequest, res: Response) => {
+    const { minutes } = req.body || {};
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (
+      !hasServerPermission(srv, req.user!.id, 'kickMembers') &&
+      !hasServerPermission(srv, req.user!.id, 'manageServer')
+    ) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    if (req.params.userId === srv.ownerId) {
+      return res.status(400).json({ error: 'Cannot timeout the server owner.' });
+    }
+
+    const mins = Number(minutes) || 0;
+    const timedOutUntil = { ...(srv.timedOutUntil || {}) };
+    if (mins <= 0) {
+      delete timedOutUntil[req.params.userId];
+    } else {
+      timedOutUntil[req.params.userId] = new Date(Date.now() + mins * 60 * 1000).toISOString();
+    }
+    srv.timedOutUntil = timedOutUntil;
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ server: srv });
+  });
+
+  app.post('/api/servers/:id/members/:userId/ban', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (
+      !hasServerPermission(srv, req.user!.id, 'kickMembers') &&
+      !hasServerPermission(srv, req.user!.id, 'manageServer')
+    ) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    if (req.params.userId === srv.ownerId) {
+      return res.status(400).json({ error: 'Cannot ban the server owner.' });
+    }
+
+    srv.memberIds = srv.memberIds.filter((id) => id !== req.params.userId);
+    if (srv.memberRoles) delete srv.memberRoles[req.params.userId];
+    if (srv.timedOutUntil) delete srv.timedOutUntil[req.params.userId];
+    if (!srv.bannedUserIds?.includes(req.params.userId)) {
+      srv.bannedUserIds = [...(srv.bannedUserIds || []), req.params.userId];
+    }
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+
+    const leftSrv = removeUserFromVoice(req.params.userId);
+    if (leftSrv) broadcastVoiceForServer(leftSrv);
+    broadcastToUsers([...srv.memberIds, req.params.userId], { type: 'server:updated', server: srv });
+    return res.json({ server: srv });
+  });
+
+  app.delete('/api/servers/:id/bans/:userId', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const rawSrv = db.servers.find((s) => s.id === req.params.id);
+    if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
+    const srv = ensureServerDefaults(rawSrv);
+    if (
+      !hasServerPermission(srv, req.user!.id, 'kickMembers') &&
+      !hasServerPermission(srv, req.user!.id, 'manageServer')
+    ) {
+      return res.status(403).json({ error: 'Permission denied.' });
+    }
+    srv.bannedUserIds = (srv.bannedUserIds || []).filter((id) => id !== req.params.userId);
+    const idx = db.servers.findIndex((s) => s.id === srv.id);
+    if (idx !== -1) db.servers[idx] = srv;
+    writeDB(db);
+    broadcastToUsers(srv.memberIds, { type: 'server:updated', server: srv });
+    return res.json({ server: srv });
+  });
+
   app.delete('/api/servers/:id/members/:userId', authMiddleware, (req: AuthRequest, res: Response) => {
     const db = readDB();
     const rawSrv = db.servers.find((s) => s.id === req.params.id);
@@ -1658,6 +2302,8 @@ async function startServer() {
     if (idx !== -1) db.servers[idx] = srv;
     writeDB(db);
 
+    const leftSrv = removeUserFromVoice(req.params.userId);
+    if (leftSrv) broadcastVoiceForServer(leftSrv);
     broadcastToUsers([...srv.memberIds, req.params.userId], { type: 'server:updated', server: srv });
     return res.json({ server: srv });
   });
@@ -1713,6 +2359,17 @@ async function startServer() {
       const rawSrv = db.servers.find((s) => s.id === req.params.id);
       if (!rawSrv) return res.status(404).json({ error: 'Server not found.' });
       const srv = ensureServerDefaults(rawSrv);
+
+      if (srv.bannedUserIds?.includes(req.user!.id)) {
+        return res.status(403).json({ error: 'You are banned from this server.' });
+      }
+      const timeoutIso = srv.timedOutUntil?.[req.user!.id];
+      if (timeoutIso && new Date(timeoutIso).getTime() > Date.now()) {
+        const minsLeft = Math.max(1, Math.ceil((new Date(timeoutIso).getTime() - Date.now()) / 60000));
+        return res.status(403).json({
+          error: `You are timed out in this server (${minsLeft} min remaining).`,
+        });
+      }
 
       if (!srv.memberIds.includes(req.user!.id)) {
         srv.memberIds.push(req.user!.id);
@@ -2106,7 +2763,8 @@ async function startServer() {
     const users = [...(reactions[clean] || [])];
     const uid = req.user!.id;
     const i = users.indexOf(uid);
-    if (i === -1) users.push(uid);
+    const wasAdded = i === -1;
+    if (wasAdded) users.push(uid);
     else users.splice(i, 1);
 
     if (users.length === 0) delete reactions[clean];
@@ -2114,6 +2772,25 @@ async function startServer() {
     msg.reactions = reactions;
     writeDB(db);
     broadcastMessageEvent(db, msg, 'chat:message_updated');
+
+    if (wasAdded) {
+      const actor = db.users.find((u) => u.id === uid);
+      const reactionPayload = {
+        type: 'chat:reaction_added',
+        message: msg,
+        actorId: uid,
+        actorName: actor?.name || req.user!.name,
+        actorAvatar: actor?.avatarUrl,
+        emoji: clean,
+      };
+      if (msg.serverId) {
+        const srv = db.servers.find((s) => s.id === msg.serverId);
+        if (srv) broadcastToUsers(srv.memberIds, reactionPayload);
+      } else if (msg.dmKey) {
+        broadcastToUsers(msg.dmKey.split('__'), reactionPayload);
+      }
+    }
+
     return res.json({ message: msg });
   });
 

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Volume2,
   Mic,
@@ -10,6 +10,11 @@ import {
   Hash,
   Users,
   Lock,
+  MonitorUp,
+  MonitorOff,
+  Maximize2,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { Channel, Server, VoiceParticipant, VoiceSettings } from '../types';
 import { ActiveVoiceInfo } from './Sidebar';
@@ -19,15 +24,21 @@ import { makeInitialsAvatar } from '../utils/avatars';
 interface VoiceChannelStageProps {
   channel: Channel;
   server: Server;
+  currentUserId: string;
   participants: VoiceParticipant[];
   activeVoice: ActiveVoiceInfo | null;
   voiceSettings: VoiceSettings;
   canConnect: boolean;
   canSpeak: boolean;
+  localVideoStream: MediaStream | null;
+  remoteVideoStreams: Record<string, MediaStream>;
+  streamingUserIds?: Set<string>;
   onJoinVoice: () => void;
   onLeaveVoice: () => void;
   onToggleMute: () => void;
   onToggleDeafen: () => void;
+  onStartVoiceStream: () => void;
+  onStopVoiceStream: () => void;
   onPttHoldStart: () => void;
   onPttHoldEnd: () => void;
   onSwitchInputMode: (mode: 'vad' | 'ptt') => void;
@@ -36,18 +47,47 @@ interface VoiceChannelStageProps {
   onOpenProfile: (userId: string) => void;
 }
 
+const StreamVideoPlayer: React.FC<{ stream: MediaStream; muted?: boolean }> = ({
+  stream,
+  muted = false,
+}) => {
+  const videoRef = useRef<HTMLVideoElement>(null);
+
+  useEffect(() => {
+    if (videoRef.current) {
+      videoRef.current.srcObject = stream;
+    }
+  }, [stream]);
+
+  return (
+    <video
+      ref={videoRef}
+      autoPlay
+      playsInline
+      muted={muted}
+      className="w-full h-full object-contain bg-black"
+    />
+  );
+};
+
 export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
   channel,
   server,
+  currentUserId,
   participants,
   activeVoice,
   voiceSettings,
   canConnect,
   canSpeak,
+  localVideoStream,
+  remoteVideoStreams,
+  streamingUserIds,
   onJoinVoice,
   onLeaveVoice,
   onToggleMute,
   onToggleDeafen,
+  onStartVoiceStream,
+  onStopVoiceStream,
   onPttHoldStart,
   onPttHoldEnd,
   onSwitchInputMode,
@@ -57,6 +97,42 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
 }) => {
   const isConnectedHere =
     activeVoice?.serverId === server.id && activeVoice?.channelId === channel.id;
+  const [watchingUserId, setWatchingUserId] = useState<string | null>(null);
+  const stageContainerRef = useRef<HTMLDivElement>(null);
+
+  // Identify participants actively streaming in this voice room
+  const streamingParticipants = participants.filter(
+    (p) =>
+      p.isStreaming ||
+      streamingUserIds?.has(p.userId) ||
+      (p.userId === currentUserId && Boolean(localVideoStream)) ||
+      Boolean(remoteVideoStreams[p.userId])
+  );
+
+  // Auto-select the first available video stream if user hasn't explicitly hidden it
+  useEffect(() => {
+    if (watchingUserId && !streamingParticipants.some((p) => p.userId === watchingUserId)) {
+      setWatchingUserId(null);
+    } else if (!watchingUserId && streamingParticipants.length > 0) {
+      const withVideo =
+        streamingParticipants.find((p) =>
+          p.userId === currentUserId ? Boolean(localVideoStream) : Boolean(remoteVideoStreams[p.userId])
+        ) || streamingParticipants[0];
+      if (withVideo) setWatchingUserId(withVideo.userId);
+    }
+  }, [streamingParticipants.length, localVideoStream, remoteVideoStreams, currentUserId, watchingUserId]);
+
+  const activeStreamer = watchingUserId
+    ? streamingParticipants.find((p) => p.userId === watchingUserId) || null
+    : null;
+  const activeStreamObj = activeStreamer
+    ? activeStreamer.userId === currentUserId
+      ? localVideoStream
+      : remoteVideoStreams[activeStreamer.userId] || null
+    : null;
+
+  const isLocalStreamingInRoom =
+    isConnectedHere && (Boolean(activeVoice?.isStreaming) || Boolean(localVideoStream));
 
   return (
     <div className="flex-1 flex flex-col min-w-0 bg-zinc-950 text-zinc-100">
@@ -67,6 +143,12 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
           <span className="font-display text-sm font-bold text-white truncate">
             {channel.name}
           </span>
+          {streamingParticipants.length > 0 && (
+            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-bold uppercase tracking-wider shrink-0">
+              <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+              LIVE
+            </span>
+          )}
           {channel.topic && (
             <>
               <span aria-hidden="true" className="text-zinc-700 hidden sm:inline">
@@ -100,7 +182,71 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
       </div>
 
       {/* Stage Body */}
-      <div className="flex-1 overflow-y-auto p-6 flex flex-col items-center justify-center gap-6">
+      <div className="flex-1 overflow-y-auto p-4 sm:p-6 flex flex-col items-center justify-center gap-6">
+        {/* Live Stream Spotlight Viewer (Discord Go Live Style) */}
+        {activeStreamer && (
+          <div
+            ref={stageContainerRef}
+            className="w-full max-w-4xl rounded-2xl overflow-hidden bg-black border-2 border-red-500/80 shadow-2xl shadow-red-950/20"
+          >
+            <div className="px-4 py-2.5 bg-zinc-900/95 border-b border-zinc-800 flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-bold uppercase tracking-wider shrink-0">
+                  <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                  LIVE
+                </span>
+                <p className="text-xs font-bold text-white truncate">
+                  {activeStreamer.userName}
+                  {activeStreamer.streamTitle ? ` — ${activeStreamer.streamTitle}` : ' is streaming'}
+                </p>
+              </div>
+              <div className="flex items-center gap-1.5 shrink-0">
+                {activeStreamObj && (
+                  <button
+                    type="button"
+                    onClick={() => stageContainerRef.current?.requestFullscreen?.().catch(() => {})}
+                    title="Fullscreen Stream"
+                    className="p-1.5 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-zinc-200 cursor-pointer"
+                  >
+                    <Maximize2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setWatchingUserId(null)}
+                  className="px-2.5 py-1 rounded-lg bg-zinc-800 hover:bg-zinc-700 text-[11px] font-semibold text-zinc-200 flex items-center gap-1 cursor-pointer"
+                >
+                  <EyeOff className="w-3 h-3" />
+                  <span>Hide</span>
+                </button>
+              </div>
+            </div>
+
+            <div className="aspect-video w-full bg-black flex items-center justify-center relative">
+              {activeStreamObj ? (
+                <StreamVideoPlayer
+                  stream={activeStreamObj}
+                  muted={activeStreamer.userId === currentUserId}
+                />
+              ) : (
+                <div className="text-center p-6 space-y-2 max-w-sm">
+                  <div className="w-12 h-12 rounded-full bg-red-600/20 border border-red-500 text-red-400 flex items-center justify-center mx-auto">
+                    <Radio className="w-5 h-5 animate-pulse" />
+                  </div>
+                  <p className="text-xs font-bold text-white">
+                    {activeStreamer.userName} is live
+                  </p>
+                  <p className="text-[11px] text-zinc-400">
+                    {isConnectedHere
+                      ? 'Connecting peer video stream over WebRTC...'
+                      : 'Join the voice channel below to watch the live video feed.'}
+                  </p>
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
         {participants.length === 0 ? (
           <div className="text-center max-w-md space-y-3">
             <div className="w-16 h-16 rounded-2xl bg-zinc-900 border border-zinc-800 flex items-center justify-center mx-auto text-zinc-300">
@@ -110,7 +256,7 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
               {channel.name}
             </h3>
             <p className="text-xs text-zinc-400 leading-relaxed">
-              No one is currently in this voice channel. Join now to talk with server members using Voice Activity or Push to Talk.
+              No one is currently in this voice channel. Join now to talk or share your screen live with server members.
             </p>
           </div>
         ) : (
@@ -133,18 +279,29 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
             <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
               {participants.map((p) => {
                 const isSpeaking = p.speaking && !p.muted;
+                const isStreamingPeer = Boolean(
+                  p.isStreaming ||
+                    streamingUserIds?.has(p.userId) ||
+                    (p.userId === currentUserId && localVideoStream) ||
+                    remoteVideoStreams[p.userId]
+                );
+
                 return (
-                  <button
+                  <div
                     key={p.userId}
-                    type="button"
-                    onClick={() => onOpenProfile(p.userId)}
-                    className={`p-5 rounded-2xl bg-zinc-900 border transition-all flex flex-col items-center gap-3 text-center cursor-pointer ${
-                      isSpeaking
+                    className={`p-5 rounded-2xl bg-zinc-900 border transition-all flex flex-col items-center gap-3 text-center ${
+                      isStreamingPeer
+                        ? 'border-red-500 ring-2 ring-red-500/40'
+                        : isSpeaking
                         ? 'border-emerald-500 ring-2 ring-emerald-500/40'
                         : 'border-zinc-800 hover:border-zinc-700'
                     }`}
                   >
-                    <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => onOpenProfile(p.userId)}
+                      className="relative cursor-pointer focus:outline-none"
+                    >
                       <img
                         src={p.userAvatar}
                         alt={p.userName}
@@ -152,21 +309,40 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
                         onError={(e) => {
                           (e.target as HTMLImageElement).src = makeInitialsAvatar(p.userName);
                         }}
-                        className={`w-16 h-16 rounded-full object-cover border-2 transition-colors ${
-                          isSpeaking ? 'border-emerald-400' : 'border-zinc-700'
+                        className={`w-16 h-16 rounded-full object-cover transition-all ${
+                          isStreamingPeer
+                            ? 'ring-3 ring-red-500 border-2 border-zinc-950'
+                            : isSpeaking
+                            ? 'border-2 border-emerald-400 ring-2 ring-emerald-500'
+                            : 'border-2 border-zinc-700'
                         }`}
                       />
+                      {isStreamingPeer && (
+                        <span className="absolute -top-1 left-1/2 -translate-x-1/2 px-1.5 py-0.5 rounded-full bg-red-600 text-white text-[9px] font-extrabold uppercase tracking-wider border border-zinc-950">
+                          LIVE
+                        </span>
+                      )}
                       {(p.muted || p.deafened) && (
                         <span className="absolute -bottom-1 -right-1 w-6 h-6 rounded-full bg-zinc-950 border border-zinc-700 flex items-center justify-center text-red-400">
                           {p.muted ? <MicOff className="w-3 h-3" /> : <Volume2 className="w-3 h-3 opacity-60" />}
                         </span>
                       )}
-                    </div>
+                    </button>
 
                     <div className="min-w-0 w-full">
                       <p className="text-xs font-bold text-white truncate">{p.userName}</p>
-                      <p className="text-[11px] text-zinc-400 mt-0.5">
-                        {p.deafened
+                      <p
+                        className={`text-[11px] mt-0.5 ${
+                          isStreamingPeer
+                            ? 'text-red-400 font-semibold'
+                            : isSpeaking
+                            ? 'text-emerald-400 font-semibold'
+                            : 'text-zinc-400'
+                        }`}
+                      >
+                        {isStreamingPeer
+                          ? p.streamTitle || 'Streaming Live'
+                          : p.deafened
                           ? 'Deafened'
                           : p.muted
                           ? 'Muted'
@@ -175,7 +351,18 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
                           : 'Listening'}
                       </p>
                     </div>
-                  </button>
+
+                    {isStreamingPeer && watchingUserId !== p.userId && (
+                      <button
+                        type="button"
+                        onClick={() => setWatchingUserId(p.userId)}
+                        className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-[11px] font-semibold flex items-center gap-1 cursor-pointer"
+                      >
+                        <Eye className="w-3 h-3" />
+                        <span>Watch Stream</span>
+                      </button>
+                    )}
+                  </div>
                 );
               })}
             </div>
@@ -228,7 +415,7 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
             </div>
           )
         ) : (
-          <div className="w-full max-w-xl flex flex-col items-center gap-3">
+          <div className="w-full max-w-2xl flex flex-col items-center gap-3">
             {/* Prominent Push-to-Talk Touch & Desktop Button */}
             {voiceSettings.inputMode === 'ptt' && canSpeak && (
               <button
@@ -286,6 +473,28 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
               >
                 <Headphones className="w-4 h-4" />
                 <span>{activeVoice.deafened ? 'Deafened' : 'Deafen'}</span>
+              </button>
+
+              <button
+                type="button"
+                onClick={isLocalStreamingInRoom ? onStopVoiceStream : onStartVoiceStream}
+                className={`py-2.5 px-4 rounded-xl text-xs font-semibold flex items-center gap-2 border transition-colors cursor-pointer whitespace-nowrap ${
+                  isLocalStreamingInRoom
+                    ? 'bg-red-600 hover:bg-red-700 text-white border-red-500'
+                    : 'bg-zinc-900 hover:bg-zinc-800 text-zinc-100 border-zinc-800'
+                }`}
+              >
+                {isLocalStreamingInRoom ? (
+                  <>
+                    <MonitorOff className="w-4 h-4" />
+                    <span>Stop Stream</span>
+                  </>
+                ) : (
+                  <>
+                    <MonitorUp className="w-4 h-4" />
+                    <span>Share Screen / Go Live</span>
+                  </>
+                )}
               </button>
 
               <button

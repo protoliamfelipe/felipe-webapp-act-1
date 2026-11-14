@@ -4,8 +4,12 @@ import {
   Server,
   ServerRole,
   RolePermissions,
+  ChannelCategory,
   Channel,
+  CustomEmoji,
+  ServerInvite,
   ChatMessage,
+  VoiceParticipant,
   Post,
   PostComment,
   FriendsOverview,
@@ -20,6 +24,31 @@ import {
 } from '../utils/permissions';
 
 const LOCAL_DB_KEY = 'pilgrim_local_db_v4';
+const LOCAL_VOICE_KEY = 'pilgrim_local_voice_v1';
+
+function readLocalVoice(): VoiceParticipant[] {
+  try {
+    const raw = localStorage.getItem(LOCAL_VOICE_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function writeLocalVoice(list: VoiceParticipant[]) {
+  try {
+    localStorage.setItem(LOCAL_VOICE_KEY, JSON.stringify(list));
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel('pilgrim_realtime_sync');
+      ch.postMessage({ type: 'voice:sync', participants: list });
+      ch.close();
+    }
+  } catch {
+    // ignore storage quota
+  }
+}
 
 const localEmailChallenges = new Map<
   string,
@@ -103,7 +132,17 @@ function ensureLocalServerDefaults(srv: Server): Server {
     ...ch,
     type: ch.type === 'voice' ? ('voice' as const) : ('text' as const),
   }));
-  return { ...srv, roles, memberRoles, channels };
+  return {
+    ...srv,
+    roles,
+    memberRoles,
+    channels,
+    categories: srv.categories || [],
+    customEmojis: srv.customEmojis || [],
+    invites: srv.invites || [],
+    bannedUserIds: srv.bannedUserIds || [],
+    timedOutUntil: srv.timedOutUntil || {},
+  };
 }
 
 function createInitialLocalDB(): LocalDB {
@@ -499,33 +538,10 @@ export const localFallback = {
     };
   },
 
-  async requestEmailLoginCode(email: string) {
-    if (!email || !email.includes('@')) {
-      throw new Error('Please enter a valid email address.');
-    }
-    const normalized = email.toLowerCase().trim();
-    const db = readLocalDB();
-    const found = db.users.find((u) => u.email.toLowerCase() === normalized);
-    if (!found) {
-      throw new Error(
-        'No Pilgrim account exists for that email address. Switch to Create an Account to sign up (13+ only).'
-      );
-    }
-    const code = String(Math.floor(100000 + Math.random() * 900000));
-    const magicToken = `local_magic_${Date.now()}_${Math.random().toString(36).slice(2, 10)}`;
-    localEmailChallenges.set(normalized, {
-      code,
-      magicToken,
-      userId: found.id,
-      expiresAt: Date.now() + 10 * 60 * 1000,
-    });
-    return {
-      sent: true,
-      deliveryMode: 'preview' as const,
-      previewCode: code,
-      magicToken,
-      expiresInSeconds: 600,
-    };
+  async requestEmailLoginCode(_email: string): Promise<{ sent: boolean; deliveryMode: 'email'; expiresInSeconds: number }> {
+    throw new Error(
+      'Cannot send email verification code because the live backend email service is unavailable in this preview or has no email provider configured. Please sign in with your password.'
+    );
   },
 
   async verifyEmailLoginCode(data: { email?: string; code?: string; magicToken?: string }) {
@@ -579,6 +595,22 @@ export const localFallback = {
     const user = requireLocalUser(db, token);
     user.status = status;
     writeLocalDB(db);
+    return { user: sanitize(user) };
+  },
+
+  async updateStreamStatus(token: string | null, isStreaming: boolean, streamTitle?: string) {
+    const db = readLocalDB();
+    const user = requireLocalUser(db, token);
+    user.isStreaming = Boolean(isStreaming);
+    user.streamTitle =
+      user.isStreaming && streamTitle?.trim() ? streamTitle.trim().slice(0, 120) : undefined;
+    writeLocalDB(db);
+    const list = readLocalVoice().map((p) =>
+      p.userId === user.id
+        ? { ...p, isStreaming: user.isStreaming, streamTitle: user.streamTitle }
+        : p
+    );
+    writeLocalVoice(list);
     return { user: sanitize(user) };
   },
 
@@ -698,7 +730,7 @@ export const localFallback = {
 
   async createServer(
     token: string | null,
-    data: { name: string; description: string; category: string; iconStyle?: string; iconFile?: File | null }
+    data: { name: string; description: string; category?: string; iconStyle?: string; iconFile?: File | null }
   ) {
     const db = readLocalDB();
     const me = requireLocalUser(db, token);
@@ -710,11 +742,12 @@ export const localFallback = {
       id: serverId,
       name: data.name.trim(),
       description: data.description.trim() || 'A Pilgrim gaming community server.',
-      category: data.category.trim() || 'Gaming',
+      category: data.category?.trim() || 'Community',
       iconUrl,
       iconStyle: data.iconStyle || 'monogram',
       ownerId: me.id,
       memberIds: [me.id],
+      categories: [],
       channels: [
         { id: `ch_${Date.now()}_1`, name: 'general', type: 'text', topic: 'Main server chat' },
         { id: `ch_${Date.now()}_2`, name: 'clips-and-guides', type: 'text', topic: 'Share highlights & strategies' },
@@ -722,11 +755,48 @@ export const localFallback = {
       ],
       roles,
       memberRoles: { [me.id]: [roles[0].id] },
+      customEmojis: [],
+      invites: [],
+      bannedUserIds: [],
+      timedOutUntil: {},
       createdAt: new Date().toISOString(),
     };
     db.servers.unshift(srv);
     writeLocalDB(db);
     return { server: { ...srv, isMember: true, memberCount: 1 } };
+  },
+
+  async updateServer(
+    token: string | null,
+    serverId: string,
+    data: {
+      name?: string;
+      description?: string;
+      iconStyle?: string;
+      iconFile?: File | null;
+      bannerFile?: File | null;
+      removeIcon?: boolean;
+      removeBanner?: boolean;
+    }
+  ) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageServer')) {
+      throw new Error('Only server managers or owners can update server settings.');
+    }
+    if (data.name?.trim()) srv.name = data.name.trim();
+    if (data.description !== undefined) srv.description = data.description.trim();
+    if (data.iconStyle) srv.iconStyle = data.iconStyle;
+    if (data.iconFile) srv.iconUrl = await fileToDataUrl(data.iconFile);
+    else if (data.removeIcon) srv.iconUrl = undefined;
+    if (data.bannerFile) srv.bannerUrl = await fileToDataUrl(data.bannerFile);
+    else if (data.removeBanner) srv.bannerUrl = undefined;
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: { ...srv, isMember: srv.memberIds.includes(me.id), memberCount: srv.memberIds.length } };
   },
 
   async joinServer(token: string | null, serverId: string) {
@@ -735,6 +805,9 @@ export const localFallback = {
     const idx = db.servers.findIndex((s) => s.id === serverId);
     if (idx === -1) throw new Error('Server not found.');
     const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (srv.bannedUserIds?.includes(me.id)) {
+      throw new Error('You are banned from joining this server.');
+    }
     if (!srv.memberIds.includes(me.id)) {
       srv.memberIds.push(me.id);
     }
@@ -743,10 +816,63 @@ export const localFallback = {
     return { server: { ...srv, isMember: true, memberCount: srv.memberIds.length } };
   },
 
+  async createCategory(token: string | null, serverId: string, name: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageChannels')) throw new Error('Permission denied.');
+    const category: ChannelCategory = {
+      id: `cat_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+      name: name.trim(),
+      collapsed: false,
+    };
+    srv.categories = [...(srv.categories || []), category];
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { category, server: srv };
+  },
+
+  async updateCategory(
+    token: string | null,
+    serverId: string,
+    catId: string,
+    data: { name?: string; collapsed?: boolean }
+  ) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageChannels')) throw new Error('Permission denied.');
+    const cat = (srv.categories || []).find((c) => c.id === catId);
+    if (!cat) throw new Error('Category not found.');
+    if (data.name?.trim()) cat.name = data.name.trim();
+    if (typeof data.collapsed === 'boolean') cat.collapsed = data.collapsed;
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { category: cat, server: srv };
+  },
+
+  async deleteCategory(token: string | null, serverId: string, catId: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageChannels')) throw new Error('Permission denied.');
+    srv.categories = (srv.categories || []).filter((c) => c.id !== catId);
+    srv.channels = srv.channels.map((ch) => (ch.categoryId === catId ? { ...ch, categoryId: undefined } : ch));
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: srv };
+  },
+
   async createChannel(
     token: string | null,
     serverId: string,
-    data: { name: string; topic?: string; type?: 'text' | 'voice' }
+    data: { name: string; topic?: string; type?: 'text' | 'voice'; categoryId?: string }
   ) {
     const db = readLocalDB();
     const me = requireLocalUser(db, token);
@@ -766,11 +892,201 @@ export const localFallback = {
       name: clean || (channelType === 'voice' ? 'Voice Room' : 'channel'),
       type: channelType,
       topic: data.topic?.trim() || '',
+      categoryId: data.categoryId || undefined,
     };
     srv.channels.push(channel);
     db.servers[idx] = srv;
     writeLocalDB(db);
     return { channel, server: srv };
+  },
+
+  async updateChannel(
+    token: string | null,
+    serverId: string,
+    channelId: string,
+    data: { name?: string; topic?: string; categoryId?: string | null }
+  ) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageChannels')) throw new Error('Permission denied.');
+    const ch = srv.channels.find((c) => c.id === channelId);
+    if (!ch) throw new Error('Channel not found.');
+    if (data.name?.trim()) {
+      ch.name =
+        ch.type === 'voice'
+          ? data.name.trim()
+          : data.name.trim().toLowerCase().replace(/[^a-z0-9-]/g, '-') || ch.name;
+    }
+    if (data.topic !== undefined) ch.topic = data.topic.trim();
+    if (data.categoryId !== undefined) ch.categoryId = data.categoryId || undefined;
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { channel: ch, server: srv };
+  },
+
+  async deleteChannel(token: string | null, serverId: string, channelId: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageChannels')) throw new Error('Permission denied.');
+    srv.channels = srv.channels.filter((c) => c.id !== channelId);
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: srv };
+  },
+
+  async uploadServerEmoji(
+    token: string | null,
+    serverId: string,
+    data: { name: string; file: File; animated: boolean }
+  ) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageServer') && !hasServerPermission(srv, me.id, 'manageRoles')) {
+      throw new Error('Permission denied.');
+    }
+    const url = await fileToDataUrl(data.file);
+    const cleanName =
+      data.name.trim().toLowerCase().replace(/[^a-z0-9_]/g, '_').replace(/^_+|_+$/g, '') ||
+      `emoji_${Date.now().toString().slice(-4)}`;
+    const emoji: CustomEmoji = {
+      id: `ce_${Date.now()}_${Math.random().toString(36).substring(2, 5)}`,
+      name: cleanName,
+      url,
+      animated: data.animated,
+      uploadedBy: me.id,
+      createdAt: new Date().toISOString(),
+    };
+    srv.customEmojis = [...(srv.customEmojis || []), emoji];
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { emoji, server: srv };
+  },
+
+  async deleteServerEmoji(token: string | null, serverId: string, emojiId: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'manageServer') && !hasServerPermission(srv, me.id, 'manageRoles')) {
+      throw new Error('Permission denied.');
+    }
+    srv.customEmojis = (srv.customEmojis || []).filter((e) => e.id !== emojiId);
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: srv };
+  },
+
+  async createInvite(
+    token: string | null,
+    serverId: string,
+    options?: { maxUses?: number; maxAgeHours?: number }
+  ) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    const code = Math.random().toString(36).substring(2, 10).toUpperCase();
+    const invite: ServerInvite = {
+      code,
+      createdBy: me.id,
+      createdByName: me.name,
+      uses: 0,
+      maxUses: options?.maxUses && options.maxUses > 0 ? options.maxUses : undefined,
+      expiresAt:
+        options?.maxAgeHours && options.maxAgeHours > 0
+          ? new Date(Date.now() + options.maxAgeHours * 3600 * 1000).toISOString()
+          : undefined,
+      createdAt: new Date().toISOString(),
+    };
+    srv.invites = [invite, ...(srv.invites || [])];
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { invite, server: srv };
+  },
+
+  async deleteInvite(token: string | null, serverId: string, code: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    const inv = (srv.invites || []).find((i) => i.code === code);
+    if (!inv) throw new Error('Invite not found.');
+    if (inv.createdBy !== me.id && !hasServerPermission(srv, me.id, 'manageServer')) {
+      throw new Error('Permission denied.');
+    }
+    srv.invites = (srv.invites || []).filter((i) => i.code !== code);
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: srv };
+  },
+
+  async getInvitePreview(code: string) {
+    const db = readLocalDB();
+    const clean = code.trim().toUpperCase();
+    for (const raw of db.servers) {
+      const srv = ensureLocalServerDefaults(raw);
+      const inv = (srv.invites || []).find((i) => i.code.toUpperCase() === clean);
+      if (inv) {
+        if (inv.expiresAt && new Date(inv.expiresAt).getTime() < Date.now()) {
+          throw new Error('This invite link has expired.');
+        }
+        if (inv.maxUses && inv.uses >= inv.maxUses) {
+          throw new Error('This invite link has reached its maximum uses.');
+        }
+        return {
+          invite: inv,
+          server: {
+            id: srv.id,
+            name: srv.name,
+            description: srv.description,
+            iconUrl: srv.iconUrl,
+            bannerUrl: srv.bannerUrl,
+            iconStyle: srv.iconStyle,
+            memberCount: srv.memberIds.length,
+          },
+        };
+      }
+    }
+    throw new Error('Invalid or expired invite code.');
+  },
+
+  async joinByInvite(token: string | null, code: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const clean = code.trim().toUpperCase();
+    for (let i = 0; i < db.servers.length; i++) {
+      const srv = ensureLocalServerDefaults(db.servers[i]);
+      const inv = (srv.invites || []).find((item) => item.code.toUpperCase() === clean);
+      if (inv) {
+        if (srv.bannedUserIds?.includes(me.id)) {
+          throw new Error('You are banned from this server.');
+        }
+        if (inv.expiresAt && new Date(inv.expiresAt).getTime() < Date.now()) {
+          throw new Error('This invite link has expired.');
+        }
+        if (inv.maxUses && inv.uses >= inv.maxUses) {
+          throw new Error('This invite link has reached its maximum uses.');
+        }
+        inv.uses += 1;
+        if (!srv.memberIds.includes(me.id)) srv.memberIds.push(me.id);
+        db.servers[i] = srv;
+        writeLocalDB(db);
+        return { server: { ...srv, isMember: true, memberCount: srv.memberIds.length } };
+      }
+    }
+    throw new Error('Invalid or expired invite code.');
   },
 
   async createRole(
@@ -855,6 +1171,58 @@ export const localFallback = {
     return { server: srv };
   },
 
+  async timeoutMember(token: string | null, serverId: string, userId: string, minutes: number) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'kickMembers') && !hasServerPermission(srv, me.id, 'manageServer')) {
+      throw new Error('Permission denied.');
+    }
+    const timedOutUntil = { ...(srv.timedOutUntil || {}) };
+    if (minutes <= 0) delete timedOutUntil[userId];
+    else timedOutUntil[userId] = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+    srv.timedOutUntil = timedOutUntil;
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: srv };
+  },
+
+  async banMember(token: string | null, serverId: string, userId: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'kickMembers') && !hasServerPermission(srv, me.id, 'manageServer')) {
+      throw new Error('Permission denied.');
+    }
+    srv.memberIds = srv.memberIds.filter((id) => id !== userId);
+    if (srv.memberRoles) delete srv.memberRoles[userId];
+    if (!srv.bannedUserIds?.includes(userId)) {
+      srv.bannedUserIds = [...(srv.bannedUserIds || []), userId];
+    }
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: srv };
+  },
+
+  async unbanMember(token: string | null, serverId: string, userId: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const idx = db.servers.findIndex((s) => s.id === serverId);
+    if (idx === -1) throw new Error('Server not found.');
+    const srv = ensureLocalServerDefaults(db.servers[idx]);
+    if (!hasServerPermission(srv, me.id, 'kickMembers') && !hasServerPermission(srv, me.id, 'manageServer')) {
+      throw new Error('Permission denied.');
+    }
+    srv.bannedUserIds = (srv.bannedUserIds || []).filter((id) => id !== userId);
+    db.servers[idx] = srv;
+    writeLocalDB(db);
+    return { server: srv };
+  },
+
   async kickMember(token: string | null, serverId: string, userId: string) {
     const db = readLocalDB();
     const me = requireLocalUser(db, token);
@@ -869,6 +1237,33 @@ export const localFallback = {
     db.servers[idx] = srv;
     writeLocalDB(db);
     return { server: srv };
+  },
+
+  async getVoiceParticipants(serverId: string) {
+    const list = readLocalVoice().filter((p) => p.serverId === serverId);
+    return { participants: list };
+  },
+
+  joinLocalVoice(participant: VoiceParticipant) {
+    const next = readLocalVoice().filter((p) => p.userId !== participant.userId);
+    next.push(participant);
+    writeLocalVoice(next);
+    return next.filter((p) => p.serverId === participant.serverId);
+  },
+
+  updateLocalVoiceState(
+    userId: string,
+    patch: Partial<Pick<VoiceParticipant, 'muted' | 'deafened' | 'speaking' | 'isStreaming' | 'streamTitle'>>
+  ) {
+    const list = readLocalVoice().map((p) => (p.userId === userId ? { ...p, ...patch } : p));
+    writeLocalVoice(list);
+    return list;
+  },
+
+  leaveLocalVoice(userId: string) {
+    const next = readLocalVoice().filter((p) => p.userId !== userId);
+    writeLocalVoice(next);
+    return next;
   },
 
   async getServerMessages(token: string | null, serverId: string, channelId: string) {
@@ -909,6 +1304,14 @@ export const localFallback = {
     const rawSrv = db.servers.find((s) => s.id === serverId);
     if (!rawSrv) throw new Error('Server not found.');
     const srv = ensureLocalServerDefaults(rawSrv);
+    if (srv.bannedUserIds?.includes(me.id)) {
+      throw new Error('You are banned from this server.');
+    }
+    const timeoutIso = srv.timedOutUntil?.[me.id];
+    if (timeoutIso && new Date(timeoutIso).getTime() > Date.now()) {
+      const minsLeft = Math.max(1, Math.ceil((new Date(timeoutIso).getTime() - Date.now()) / 60000));
+      throw new Error(`You are timed out in this server (${minsLeft} min remaining).`);
+    }
     if (!hasServerPermission(srv, me.id, 'sendMessages')) {
       throw new Error('Your role does not allow sending messages.');
     }

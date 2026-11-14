@@ -23,12 +23,13 @@ import {
 import { Post, PostComment, User, Visibility } from '../types';
 import { formatRelativeTime } from '../utils/formatters';
 import { makeInitialsAvatar } from '../utils/avatars';
-
-const COMMENT_EMOJIS = ['👍', '❤️', '🔥', '😂', '😮'];
+import { parseCustomEmojiReaction } from '../utils/emojiMedia';
+import { EmojiPicker } from './EmojiPicker';
 
 interface PostCardProps {
   post: Post;
   currentUser: User;
+  streamingUserIds?: Set<string>;
   onLike: (postId: string) => void;
   onComment: (postId: string, content: string, parentCommentId?: string) => Promise<void>;
   onEditComment: (postId: string, commentId: string, content: string) => Promise<void>;
@@ -51,6 +52,7 @@ interface PostCardProps {
 export const PostCard: React.FC<PostCardProps> = ({
   post,
   currentUser,
+  streamingUserIds,
   onLike,
   onComment,
   onEditComment,
@@ -376,6 +378,7 @@ export const PostCard: React.FC<PostCardProps> = ({
               <div className="mt-2 flex items-center flex-wrap gap-1.5 relative">
                 {reactionEntries.map(([emoji, userIds]) => {
                   const reacted = userIds.includes(currentUser.id);
+                  const parsedCustom = parseCustomEmojiReaction(emoji);
                   return (
                     <button
                       key={emoji}
@@ -387,7 +390,15 @@ export const PostCard: React.FC<PostCardProps> = ({
                           : 'bg-zinc-50 dark:bg-zinc-800/80 text-zinc-700 dark:text-zinc-300 border-zinc-200 dark:border-zinc-700 hover:border-zinc-400'
                       }`}
                     >
-                      <span>{emoji}</span>
+                      {parsedCustom ? (
+                        <img
+                          src={parsedCustom.url}
+                          alt={`:${parsedCustom.name}:`}
+                          className="w-3.5 h-3.5 object-contain"
+                        />
+                      ) : (
+                        <span>{emoji}</span>
+                      )}
                       <span>{userIds.length}</span>
                     </button>
                   );
@@ -408,27 +419,14 @@ export const PostCard: React.FC<PostCardProps> = ({
                   </button>
 
                   {reactPickerId === c.id && (
-                    <div className="absolute left-0 bottom-7 z-20 flex items-center gap-1 p-1 bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-700 rounded-xl shadow-lg">
-                      {COMMENT_EMOJIS.map((emoji) => {
-                        const active = Boolean(c.reactions?.[emoji]?.includes(currentUser.id));
-                        return (
-                          <button
-                            key={emoji}
-                            type="button"
-                            onClick={() => {
-                              setReactPickerId(null);
-                              onReactComment(post.id, c.id, emoji);
-                            }}
-                            className={`w-7 h-7 rounded-lg text-sm flex items-center justify-center transition-colors cursor-pointer ${
-                              active
-                                ? 'bg-zinc-200 dark:bg-zinc-700'
-                                : 'hover:bg-zinc-100 dark:hover:bg-zinc-800'
-                            }`}
-                          >
-                            {emoji}
-                          </button>
-                        );
-                      })}
+                    <div className="absolute left-0 bottom-full mb-1.5 z-30">
+                      <EmojiPicker
+                        onSelectEmoji={(emoji) => {
+                          setReactPickerId(null);
+                          onReactComment(post.id, c.id, emoji);
+                        }}
+                        onClose={() => setReactPickerId(null)}
+                      />
                     </div>
                   )}
                 </div>
@@ -508,7 +506,7 @@ export const PostCard: React.FC<PostCardProps> = ({
           <button
             type="button"
             onClick={() => onOpenProfile(post.authorId)}
-            className="shrink-0 cursor-pointer"
+            className="shrink-0 cursor-pointer relative"
           >
             <img
               src={post.authorAvatar}
@@ -517,8 +515,17 @@ export const PostCard: React.FC<PostCardProps> = ({
               onError={(e) => {
                 (e.target as HTMLImageElement).src = makeInitialsAvatar(post.authorName);
               }}
-              className="w-10 h-10 rounded-full object-cover border border-zinc-200 dark:border-zinc-700"
+              className={`w-10 h-10 rounded-full object-cover ${
+                streamingUserIds?.has(post.authorId)
+                  ? 'ring-2 ring-red-500 border border-zinc-950'
+                  : 'border border-zinc-200 dark:border-zinc-700'
+              }`}
             />
+            {streamingUserIds?.has(post.authorId) && (
+              <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 px-1 rounded-full bg-red-600 text-white text-[8px] font-extrabold border border-white dark:border-zinc-900">
+                LIVE
+              </span>
+            )}
           </button>
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">

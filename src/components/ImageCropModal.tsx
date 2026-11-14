@@ -16,6 +16,7 @@ interface ImageCropModalProps {
   isOpen: boolean;
   imageSrc: string | null;
   mode: 'avatar' | 'banner';
+  title?: string;
   fileName?: string;
   onCancel: () => void;
   onApply: (croppedFile: File, previewUrl: string) => void;
@@ -25,6 +26,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
   isOpen,
   imageSrc,
   mode,
+  title,
   fileName = 'image.png',
   onCancel,
   onApply,
@@ -205,7 +207,7 @@ export const ImageCropModal: React.FC<ImageCropModalProps> = ({
         <div className="px-6 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
           <div>
             <h3 className="font-display text-lg font-bold text-zinc-950 dark:text-white">
-              {mode === 'avatar' ? 'Edit Profile Picture' : 'Edit Profile Banner'}
+              {title || (mode === 'avatar' ? 'Edit Profile Picture' : 'Edit Profile Banner')}
             </h3>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
               Drag to frame, scroll or slide to zoom, and rotate to fit.

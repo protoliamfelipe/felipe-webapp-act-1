@@ -16,12 +16,33 @@ import {
   Camera,
   Crop,
   Trash2,
+  Radio,
+  VideoOff,
 } from 'lucide-react';
 import { Post, User, Visibility } from '../types';
 import { api } from '../services/api';
 import { PostCard } from './PostCard';
 import { ImageCropModal } from './ImageCropModal';
 import { makeInitialsAvatar } from '../utils/avatars';
+
+const ProfileLivePlayer: React.FC<{ stream: MediaStream; muted?: boolean }> = ({
+  stream,
+  muted = false,
+}) => {
+  const ref = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    if (ref.current) ref.current.srcObject = stream;
+  }, [stream]);
+  return (
+    <video
+      ref={ref}
+      autoPlay
+      playsInline
+      muted={muted}
+      className="w-full h-full object-contain bg-black"
+    />
+  );
+};
 
 interface ProfileDashboardProps {
   profileUser: User;
@@ -30,6 +51,11 @@ interface ProfileDashboardProps {
   pendingDirection: 'incoming' | 'outgoing' | null;
   friendCount: number;
   posts: Post[];
+  streamingUserIds?: Set<string>;
+  localVideoStream?: MediaStream | null;
+  remoteVideoStreams?: Record<string, MediaStream>;
+  onOpenLiveModal?: () => void;
+  onStopLiveStream?: () => void;
   onProfileUpdated: (user: User) => void;
   onPostCreated: (post: Post) => void;
   onLike: (postId: string) => void;
@@ -60,6 +86,11 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
   pendingDirection,
   friendCount,
   posts,
+  streamingUserIds,
+  localVideoStream,
+  remoteVideoStreams = {},
+  onOpenLiveModal,
+  onStopLiveStream,
   onProfileUpdated,
   onPostCreated,
   onLike,
@@ -315,6 +346,15 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
     ? makeInitialsAvatar(editName || profileUser.name)
     : editAvatarPreview || profileUser.avatarUrl || makeInitialsAvatar(profileUser.name);
 
+  const isUserStreaming = Boolean(
+    profileUser.isStreaming ||
+      streamingUserIds?.has(profileUser.id) ||
+      (isOwnProfile && localVideoStream)
+  );
+  const activeProfileStream = isOwnProfile
+    ? localVideoStream || null
+    : remoteVideoStreams[profileUser.id] || null;
+
   return (
     <div ref={headerRef} className="pilgrim-stack">
       {/* Profile Dashboard Hero Card */}
@@ -395,8 +435,17 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
                   onError={(e) => {
                     (e.target as HTMLImageElement).src = makeInitialsAvatar(profileUser.name);
                   }}
-                  className="w-24 h-24 rounded-full object-cover border-4 border-white dark:border-zinc-900 bg-zinc-900 shadow-sm"
+                  className={`w-24 h-24 rounded-full object-cover bg-zinc-900 shadow-sm ${
+                    isUserStreaming
+                      ? 'ring-4 ring-red-500 border-4 border-white dark:border-zinc-900'
+                      : 'border-4 border-white dark:border-zinc-900'
+                  }`}
                 />
+                {isUserStreaming && (
+                  <span className="absolute -bottom-1 left-1/2 -translate-x-1/2 px-2 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-extrabold uppercase tracking-wider border-2 border-white dark:border-zinc-900 shadow">
+                    LIVE
+                  </span>
+                )}
                 {isOwnProfile && !isEditingProfile && (
                   <button
                     type="button"
@@ -409,9 +458,17 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
                 )}
               </div>
               <div className="pb-1">
-                <h1 className="font-display text-2xl font-extrabold text-zinc-950 dark:text-white leading-tight">
-                  {profileUser.name}
-                </h1>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <h1 className="font-display text-2xl font-extrabold text-zinc-950 dark:text-white leading-tight">
+                    {profileUser.name}
+                  </h1>
+                  {isUserStreaming && (
+                    <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-red-600/15 text-red-600 dark:text-red-400 border border-red-500/30 text-[11px] font-bold">
+                      <span className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />
+                      Live Now
+                    </span>
+                  )}
+                </div>
                 <div className="flex items-center gap-2 text-xs text-zinc-500 dark:text-zinc-400 mt-0.5 flex-wrap">
                   <span className="font-mono text-zinc-700 dark:text-zinc-300">{profileUser.tag}</span>
                 </div>
@@ -429,14 +486,39 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
             {/* Profile Actions */}
             <div className="flex items-center gap-2 flex-wrap">
               {isOwnProfile ? (
-                <button
-                  type="button"
-                  onClick={() => setIsEditingProfile(!isEditingProfile)}
-                  className="py-2 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 text-xs font-semibold rounded-xl flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700 transition-colors cursor-pointer"
-                >
-                  <Edit3 className="w-3.5 h-3.5" />
-                  <span>{isEditingProfile ? 'Cancel Edit' : 'Edit Profile'}</span>
-                </button>
+                <>
+                  {onOpenLiveModal && (
+                    <button
+                      type="button"
+                      onClick={isUserStreaming && onStopLiveStream ? onStopLiveStream : onOpenLiveModal}
+                      className={`py-2 px-4 text-xs font-bold rounded-xl flex items-center gap-1.5 transition-colors cursor-pointer ${
+                        isUserStreaming
+                          ? 'bg-red-600 hover:bg-red-700 text-white'
+                          : 'bg-red-600/10 hover:bg-red-600 text-red-600 hover:text-white border border-red-500/30'
+                      }`}
+                    >
+                      {isUserStreaming ? (
+                        <>
+                          <VideoOff className="w-3.5 h-3.5" />
+                          <span>End Live Stream</span>
+                        </>
+                      ) : (
+                        <>
+                          <Radio className="w-3.5 h-3.5" />
+                          <span>Go Live</span>
+                        </>
+                      )}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => setIsEditingProfile(!isEditingProfile)}
+                    className="py-2 px-4 bg-zinc-100 dark:bg-zinc-800 hover:bg-zinc-200 dark:hover:bg-zinc-700 text-zinc-900 dark:text-zinc-100 text-xs font-semibold rounded-xl flex items-center gap-1.5 border border-zinc-200 dark:border-zinc-700 transition-colors cursor-pointer"
+                  >
+                    <Edit3 className="w-3.5 h-3.5" />
+                    <span>{isEditingProfile ? 'Cancel Edit' : 'Edit Profile'}</span>
+                  </button>
+                </>
               ) : (
                 <>
                   {isFriend ? (
@@ -619,6 +701,48 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
         </div>
       </section>
 
+      {/* Facebook-style Active Live Broadcast Card on Profile */}
+      {isUserStreaming && (
+        <section className="profile-anim bg-zinc-950 text-white border-2 border-red-500/80 rounded-2xl overflow-hidden shadow-lg">
+          <div className="px-5 py-3 bg-zinc-900 border-b border-zinc-800 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-red-600 text-white text-[10px] font-extrabold uppercase tracking-wider shrink-0">
+                <span className="w-1.5 h-1.5 rounded-full bg-white animate-pulse" />
+                LIVE
+              </span>
+              <p className="text-xs font-bold truncate">
+                {profileUser.name} is live
+                {profileUser.streamTitle ? ` · ${profileUser.streamTitle}` : ''}
+              </p>
+            </div>
+            {isOwnProfile && onStopLiveStream && (
+              <button
+                type="button"
+                onClick={onStopLiveStream}
+                className="px-3 py-1 rounded-lg bg-red-600 hover:bg-red-700 text-white text-[11px] font-bold flex items-center gap-1 cursor-pointer shrink-0"
+              >
+                <VideoOff className="w-3 h-3" />
+                <span>End Live</span>
+              </button>
+            )}
+          </div>
+          {activeProfileStream ? (
+            <div className="aspect-video w-full bg-black">
+              <ProfileLivePlayer stream={activeProfileStream} muted={isOwnProfile} />
+            </div>
+          ) : (
+            <div className="p-6 text-center space-y-1.5">
+              <p className="text-xs font-semibold text-zinc-200">
+                Broadcast in progress{profileUser.streamTitle ? `: ${profileUser.streamTitle}` : ''}
+              </p>
+              <p className="text-[11px] text-zinc-400">
+                Join the streamer in a shared server voice channel to watch the real-time WebRTC feed.
+              </p>
+            </div>
+          )}
+        </section>
+      )}
+
       {/* Inline Upload & Post Box on Own Profile Dashboard */}
       {isOwnProfile && (
         <section className="profile-anim bg-white dark:bg-zinc-900 border border-zinc-200 dark:border-zinc-800 rounded-2xl pilgrim-card-pad">
@@ -696,6 +820,21 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
                   <Video className="w-3.5 h-3.5" />
                   <span>Video</span>
                 </button>
+
+                {onOpenLiveModal && (
+                  <button
+                    type="button"
+                    onClick={isUserStreaming && onStopLiveStream ? onStopLiveStream : onOpenLiveModal}
+                    className={`py-1.5 px-3 text-xs font-semibold rounded-lg flex items-center gap-1.5 transition-colors cursor-pointer ${
+                      isUserStreaming
+                        ? 'bg-red-600 text-white hover:bg-red-700'
+                        : 'bg-red-500/10 hover:bg-red-500/20 text-red-600 dark:text-red-400'
+                    }`}
+                  >
+                    <Radio className="w-3.5 h-3.5" />
+                    <span>{isUserStreaming ? 'Streaming Live' : 'Live Video'}</span>
+                  </button>
+                )}
 
                 {/* Visibility Picker */}
                 <div className="flex items-center gap-1 bg-zinc-100 dark:bg-zinc-800 p-1 rounded-lg">
@@ -780,6 +919,7 @@ export const ProfileDashboard: React.FC<ProfileDashboardProps> = ({
               key={post.id}
               post={post}
               currentUser={currentUser}
+              streamingUserIds={streamingUserIds}
               onLike={onLike}
               onComment={onComment}
               onEditComment={onEditComment}
