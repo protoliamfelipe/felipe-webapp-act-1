@@ -17,7 +17,7 @@ function extractInviteCode(raw: string): string {
   if (!trimmed) return '';
   try {
     if (trimmed.includes('invite=')) {
-      const u = new URL(trimmed.startsWith('http') ? trimmed : `https://pilgrim.app/?${trimmed.split('?')[1] || trimmed}`);
+      const u = new URL(trimmed.startsWith('http') ? trimmed : `https://arkline.app/?${trimmed.split('?')[1] || trimmed}`);
       const param = u.searchParams.get('invite');
       if (param) return param.trim();
     }
@@ -164,7 +164,7 @@ export const NewServerModal: React.FC<NewServerModalProps> = ({
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
               {tab === 'create'
                 ? 'Launch your own community server with channels, roles, and voice.'
-                : 'Paste a Pilgrim invite link or invite code to join a server.'}
+                : 'Paste an ArkLine invite link or invite code to join a server.'}
             </p>
           </div>
           <button
@@ -235,7 +235,7 @@ export const NewServerModal: React.FC<NewServerModalProps> = ({
                   Server Icon <span className="text-zinc-400 font-normal">(optional)</span>
                 </p>
                 <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                  If no photo is uploaded, Pilgrim displays the first letter of your server&apos;s name.
+                  If no photo is uploaded, ArkLine displays the first letter of your server&apos;s name.
                 </p>
                 <input
                   ref={fileRef}
@@ -331,14 +331,14 @@ export const NewServerModal: React.FC<NewServerModalProps> = ({
                 <input
                   type="text"
                   required
-                  placeholder="https://pilgrim.app/?invite=ABCD1234 or ABCD1234"
+                  placeholder="https://arkline.app/?invite=ABCD1234 or ABCD1234"
                   value={inviteInput}
                   onChange={(e) => setInviteInput(e.target.value)}
                   className="w-full pl-10 pr-3.5 py-2.5 bg-zinc-50 dark:bg-zinc-800 border border-zinc-200 dark:border-zinc-700 rounded-xl text-sm text-zinc-900 dark:text-white focus:outline-none focus:border-zinc-900 dark:focus:border-white"
                 />
               </div>
               <p className="mt-1.5 text-[11px] text-zinc-500 dark:text-zinc-400">
-                Ask a friend for a Pilgrim server invite link or 8-character code.
+                Ask a friend for an ArkLine server invite link or 8-character code.
               </p>
             </div>
 
@@ -364,7 +364,7 @@ export const NewServerModal: React.FC<NewServerModalProps> = ({
                     {invitePreview.server.name}
                   </p>
                   <p className="text-[11px] text-zinc-500 truncate">
-                    {invitePreview.server.description || 'Community server on Pilgrim'}
+                    {invitePreview.server.description || 'Community server on ArkLine'}
                   </p>
                   <div className="flex items-center gap-1 text-[10px] font-mono text-zinc-400 mt-0.5">
                     <Users className="w-3 h-3" />

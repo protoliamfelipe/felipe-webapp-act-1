@@ -50,21 +50,37 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
 
   useEffect(() => {
     if (!capturingPttKey) return;
-    const handleKey = (e: KeyboardEvent) => {
+    let ignoreFirstKeyUp = false;
+    const handleKeyDown = (e: KeyboardEvent) => {
       e.preventDefault();
       e.stopPropagation();
       if (e.code === 'Escape') {
         setCapturingPttKey(false);
         return;
       }
+      ignoreFirstKeyUp = true;
       onUpdatePreferences({
         ...preferences,
         voice: { ...preferences.voice, pttKey: e.code },
       });
       setCapturingPttKey(false);
     };
-    window.addEventListener('keydown', handleKey, true);
-    return () => window.removeEventListener('keydown', handleKey, true);
+    const handleKeyUp = (e: KeyboardEvent) => {
+      if (ignoreFirstKeyUp) {
+        e.preventDefault();
+        e.stopPropagation();
+        ignoreFirstKeyUp = false;
+      }
+    };
+    const handleWindowBlur = () => setCapturingPttKey(false);
+    window.addEventListener('keydown', handleKeyDown, true);
+    window.addEventListener('keyup', handleKeyUp, true);
+    window.addEventListener('blur', handleWindowBlur);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown, true);
+      window.removeEventListener('keyup', handleKeyUp, true);
+      window.removeEventListener('blur', handleWindowBlur);
+    };
   }, [capturingPttKey, preferences, onUpdatePreferences]);
 
   useEffect(() => {
@@ -253,11 +269,45 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
           </div>
         </div>
 
-        {/* Input Mode: Voice Activity vs Push to Talk */}
-        <div className="space-y-2.5">
-          <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-            Input Mode
-          </label>
+        {/* Input Mode: Push-to-Talk Toggle + Mode Cards + Rebindable Keybind */}
+        <div className="space-y-3">
+          <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 flex items-center justify-between gap-3">
+            <div>
+              <p className="text-xs font-bold text-zinc-900 dark:text-zinc-100">
+                Use Push to Talk
+              </p>
+              <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                {preferences.voice.inputMode === 'ptt'
+                  ? 'Enabled — mic transmits only while holding your Push-to-Talk key or touch button.'
+                  : 'Disabled — using Voice Activity (open mic above sensitivity threshold).'}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={preferences.voice.inputMode === 'ptt'}
+              aria-label="Toggle Push to Talk"
+              onClick={() =>
+                updateVoice({
+                  inputMode: preferences.voice.inputMode === 'ptt' ? 'vad' : 'ptt',
+                })
+              }
+              className={`w-11 h-6 rounded-full p-0.5 transition-colors flex items-center shrink-0 cursor-pointer ${
+                preferences.voice.inputMode === 'ptt'
+                  ? 'bg-zinc-950 dark:bg-white justify-end'
+                  : 'bg-zinc-300 dark:bg-zinc-700 justify-start'
+              }`}
+            >
+              <span
+                className={`w-5 h-5 rounded-full transition-colors ${
+                  preferences.voice.inputMode === 'ptt'
+                    ? 'bg-white dark:bg-zinc-950'
+                    : 'bg-white dark:bg-zinc-200'
+                }`}
+              />
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <button
               type="button"
@@ -290,34 +340,49 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </button>
           </div>
 
-          {preferences.voice.inputMode === 'ptt' && (
-            <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5">
-                <Keyboard className="w-4 h-4 text-zinc-500" />
-                <div>
-                  <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
-                    Desktop Push-to-Talk Shortcut
-                  </p>
-                  <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                    Hold this key while connected to a voice channel (or press the touch button on mobile).
-                  </p>
-                </div>
+          <div className="p-3.5 rounded-xl bg-zinc-50 dark:bg-zinc-950 border border-zinc-200 dark:border-zinc-800 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+            <div className="flex items-center gap-2.5">
+              <Keyboard className="w-4 h-4 text-zinc-500 shrink-0" />
+              <div>
+                <p className="text-xs font-semibold text-zinc-900 dark:text-zinc-100">
+                  Push-to-Talk Keybind
+                </p>
+                <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
+                  {preferences.voice.inputMode === 'ptt'
+                    ? 'Click Rebind and press any key (Esc to cancel).'
+                    : 'Pre-configure your shortcut for when Push to Talk is turned on.'}
+                </p>
               </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 type="button"
-                onClick={() => setCapturingPttKey(true)}
+                onClick={(e) => {
+                  e.currentTarget.blur();
+                  setCapturingPttKey((prev) => !prev);
+                }}
                 className={`py-2 px-3.5 rounded-lg text-xs font-mono font-bold border transition-colors cursor-pointer whitespace-nowrap ${
                   capturingPttKey
                     ? 'bg-zinc-950 text-white border-zinc-950 dark:bg-white dark:text-zinc-950 animate-pulse'
-                    : 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 border-zinc-300 dark:border-zinc-700'
+                    : 'bg-white dark:bg-zinc-900 text-zinc-900 dark:text-zinc-100 border-zinc-300 dark:border-zinc-700 hover:border-zinc-500'
                 }`}
               >
                 {capturingPttKey
                   ? 'Press any key...'
-                  : formatKeybindLabel(preferences.voice.pttKey)}
+                  : `${formatKeybindLabel(preferences.voice.pttKey)} · Rebind`}
               </button>
+              {preferences.voice.pttKey !== 'Space' && !capturingPttKey && (
+                <button
+                  type="button"
+                  onClick={() => updateVoice({ pttKey: 'Space' })}
+                  title="Reset Push-to-Talk keybind to Spacebar"
+                  className="py-2 px-2.5 rounded-lg text-[11px] font-semibold bg-zinc-200/80 dark:bg-zinc-800 text-zinc-700 dark:text-zinc-300 hover:bg-zinc-300 dark:hover:bg-zinc-700 cursor-pointer"
+                >
+                  Reset
+                </button>
+              )}
             </div>
-          )}
+          </div>
         </div>
 
         {/* Volume & Sensitivity Sliders */}
@@ -574,7 +639,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               Account Session
             </h2>
             <p className="text-xs text-zinc-500 dark:text-zinc-400">
-              Sign out of your Pilgrim account on this device.
+              Sign out of your ArkLine account on this device.
             </p>
           </div>
         </div>

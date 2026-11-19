@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { Menu, X, Bell, MessageSquare, Smile, UserPlus, CheckCheck, Trash2 } from 'lucide-react';
+import { Menu, X, Bell, MessageSquare, Smile, UserPlus, CheckCheck, Trash2, AtSign } from 'lucide-react';
 import { AppView } from './Sidebar';
 import { AppNotification } from '../types';
 import { formatRelativeTime } from '../utils/formatters';
@@ -13,6 +13,7 @@ interface TopBarProps {
   onClearNotifications: () => void;
   onSelectNotification: (notif: AppNotification) => void;
   onOpenAddFriend: () => void;
+  unreadDmCount?: number;
   isMobileOpen: boolean;
   setIsMobileOpen: (open: boolean) => void;
 }
@@ -25,6 +26,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onClearNotifications,
   onSelectNotification,
   onOpenAddFriend,
+  unreadDmCount = 0,
   isMobileOpen,
   setIsMobileOpen,
 }) => {
@@ -47,6 +49,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   const renderIcon = (kind: AppNotification['kind']) => {
     if (kind === 'reaction') return <Smile className="w-4 h-4 text-emerald-500 mt-0.5 shrink-0" />;
+    if (kind === 'mention') return <AtSign className="w-4 h-4 text-red-500 mt-0.5 shrink-0" />;
     if (kind === 'friend_request' || kind === 'friend_accept') {
       return <UserPlus className="w-4 h-4 text-indigo-500 mt-0.5 shrink-0" />;
     }
@@ -60,16 +63,21 @@ export const TopBar: React.FC<TopBarProps> = ({
         <button
           type="button"
           onClick={() => setIsMobileOpen(!isMobileOpen)}
-          className="p-2 -ml-1 text-zinc-600 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white lg:hidden rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
+          className="relative p-2 -ml-1 text-zinc-600 dark:text-zinc-300 hover:text-zinc-950 dark:hover:text-white lg:hidden rounded-lg hover:bg-zinc-100 dark:hover:bg-zinc-800 cursor-pointer"
           aria-label="Toggle navigation menu"
         >
           {isMobileOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+          {!isMobileOpen && unreadDmCount > 0 && (
+            <span className="absolute -top-0.5 -right-0.5 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center font-mono tabular-nums">
+              {unreadDmCount > 99 ? '99+' : unreadDmCount}
+            </span>
+          )}
         </button>
 
         <div className="flex items-center gap-2 text-sm truncate">
           <PilgrimLogo className="w-6 h-6 rounded-md" />
           <span className="font-display font-bold text-zinc-950 dark:text-zinc-50 whitespace-nowrap shrink-0">
-            Pilgrim
+            ArkLine
           </span>
           <span aria-hidden="true" className="text-zinc-300 dark:text-zinc-700">
             /

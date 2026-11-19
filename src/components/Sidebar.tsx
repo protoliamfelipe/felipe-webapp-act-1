@@ -80,7 +80,12 @@ interface SidebarProps {
   onlineUserIds: string[];
   activeDmFriendId: string | null;
   dmPopupFriendIds: string[];
+  dmSendersById?: Record<string, User>;
   unreadDmByFriendId: Record<string, number>;
+  lastDmAtByFriendId?: Record<string, string>;
+  pingsByServerId?: Record<string, number>;
+  pingsByChannelId?: Record<string, number>;
+  unreadServerIds?: string[];
   onSelectDmPopup: (friendId: string) => void;
   onDismissDmPopup: (friendId: string) => void;
   streamingUserIds?: Set<string>;
@@ -135,7 +140,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
   onlineUserIds,
   activeDmFriendId,
   dmPopupFriendIds,
+  dmSendersById = {},
   unreadDmByFriendId,
+  lastDmAtByFriendId = {},
+  pingsByServerId = {},
+  pingsByChannelId = {},
+  unreadServerIds = [],
   onSelectDmPopup,
   onDismissDmPopup,
   streamingUserIds,
@@ -190,20 +200,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
     STATUS_OPTIONS.find((s) => s.id === currentStatus)?.label || 'Online';
 
   const totalUnreadDms = Object.values(unreadDmByFriendId).reduce((sum, count) => sum + count, 0);
+  const totalServerPings = Object.values(pingsByServerId).reduce((sum, count) => sum + count, 0);
   const friendsBadgeCount = pendingFriendCount + totalUnreadDms;
+  const mobileHomeBadgeCount = friendsBadgeCount + totalServerPings;
 
   const dmPopupFriends = dmPopupFriendIds
-    .map((fid) => friends.find((f) => f.id === fid))
+    .map((fid) => friends.find((f) => f.id === fid) || dmSendersById[fid])
     .filter((f): f is User => Boolean(f));
 
-  const filteredDmFriends = friends.filter((f) => {
+  const dmUsersMap = new Map<string, User>();
+  for (const f of friends) dmUsersMap.set(f.id, f);
+  for (const u of Object.values(dmSendersById)) {
+    if (
+      u.id !== user.id &&
+      (lastDmAtByFriendId[u.id] || (unreadDmByFriendId[u.id] || 0) > 0) &&
+      !dmUsersMap.has(u.id)
+    ) {
+      dmUsersMap.set(u.id, u);
+    }
+  }
+  const allDmUsers = Array.from(dmUsersMap.values());
+
+  const filteredDmFriends = allDmUsers.filter((f) => {
     const q = dmSearch.trim().toLowerCase();
     if (!q) return true;
     return f.name.toLowerCase().includes(q) || f.tag.toLowerCase().includes(q);
   });
 
-  // Sort DM friends: unread first, then live streaming, then online
+  const getLastDmMs = (uid: string) => {
+    const ts = lastDmAtByFriendId[uid];
+    if (!ts) return 0;
+    const ms = Date.parse(ts);
+    return Number.isNaN(ms) ? 0 : ms;
+  };
+
+  // Sort DM conversations: most recent chat first, then unread count, then streaming, then alphabetical
   const sortedDmFriends = [...filteredDmFriends].sort((a, b) => {
+    const ta = getLastDmMs(a.id);
+    const tb = getLastDmMs(b.id);
+    if (ta !== tb) return tb - ta;
     const ua = unreadDmByFriendId[a.id] || 0;
     const ub = unreadDmByFriendId[b.id] || 0;
     if (ua !== ub) return ub - ua;
@@ -257,15 +292,15 @@ export const Sidebar: React.FC<SidebarProps> = ({
               }`}
             >
               <Home className="w-5 h-5" />
-              {friendsBadgeCount > 0 && (
+              {mobileHomeBadgeCount > 0 && (
                 <span className="lg:hidden absolute -bottom-1 -right-1 min-w-[16px] h-[16px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center font-mono tabular-nums">
-                  {friendsBadgeCount > 99 ? '99+' : friendsBadgeCount}
+                  {mobileHomeBadgeCount > 99 ? '99+' : mobileHomeBadgeCount}
                 </span>
               )}
             </button>
           </div>
 
-          {/* Incoming Friend DM Popups (Discord style) */}
+          {/* Incoming DM User Popups Beneath Home (Discord style) */}
           {dmPopupFriends.length > 0 && (
             <div className="w-full flex flex-col items-center gap-2 pt-0.5">
               {dmPopupFriends.map((friend) => {
@@ -278,45 +313,46 @@ export const Sidebar: React.FC<SidebarProps> = ({
                     key={friend.id}
                     className="relative group flex items-center justify-center w-full"
                   >
-                    <span className="absolute left-0 w-1 h-5 bg-red-500 rounded-r-full" />
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onSelectDmPopup(friend.id);
-                        setIsMobileOpen(false);
-                      }}
-                      title={`Direct Message from ${friend.name}`}
-                      className={`relative w-11 h-11 rounded-2xl overflow-hidden border-2 transition-all cursor-pointer bg-zinc-900 ${
-                        isFriendStreaming
-                          ? 'border-red-500 ring-2 ring-red-500/60'
-                          : 'border-zinc-700 hover:border-white'
-                      }`}
-                    >
-                      <img
-                        src={friend.avatarUrl}
-                        alt={friend.name}
-                        onError={(e) => {
-                          (e.target as HTMLImageElement).src = makeInitialsAvatar(friend.name);
+                    <span className="absolute left-0 w-1 h-5 bg-white rounded-r-full" />
+                    <div className="relative w-11 h-11">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          onSelectDmPopup(friend.id);
+                          setIsMobileOpen(false);
                         }}
-                        className="w-full h-full object-cover"
-                      />
-                    </button>
-                    {unread > 0 && (
-                      <span className="absolute -bottom-0.5 right-2.5 min-w-[17px] h-[17px] px-1 rounded-full bg-red-500 border-2 border-black text-white text-[10px] font-bold flex items-center justify-center font-mono tabular-nums pointer-events-none">
-                        {unread > 99 ? '99+' : unread}
+                        title={`Direct Message from ${friend.name}`}
+                        aria-label={`Direct Message from ${friend.name}`}
+                        className={`w-11 h-11 rounded-2xl overflow-hidden border-2 transition-all cursor-pointer bg-zinc-900 ${
+                          isFriendStreaming
+                            ? 'border-red-500 ring-2 ring-red-500/60'
+                            : 'border-zinc-700 hover:border-white'
+                        }`}
+                      >
+                        <img
+                          src={friend.avatarUrl}
+                          alt={friend.name}
+                          onError={(e) => {
+                            (e.target as HTMLImageElement).src = makeInitialsAvatar(friend.name);
+                          }}
+                          className="w-full h-full object-cover"
+                        />
+                      </button>
+                      <span className="absolute -bottom-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 border-2 border-black text-white text-[10px] font-bold flex items-center justify-center font-mono tabular-nums pointer-events-none">
+                        {unread > 99 ? '99+' : unread > 0 ? unread : 1}
                       </span>
-                    )}
-                    <button
-                      type="button"
-                      onClick={(e) => {
-                        e.stopPropagation();
-                        onDismissDmPopup(friend.id);
-                      }}
-                      aria-label={`Dismiss ${friend.name} DM popup`}
-                      className="opacity-0 group-hover:opacity-100 absolute -top-1 right-2 w-4 h-4 rounded-full bg-zinc-800 hover:bg-red-600 text-white flex items-center justify-center transition-opacity cursor-pointer"
-                    >
-                      <X className="w-2.5 h-2.5" />
-                    </button>
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onDismissDmPopup(friend.id);
+                        }}
+                        aria-label={`Dismiss ${friend.name} DM popup`}
+                        className="opacity-0 group-hover:opacity-100 absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-zinc-800 hover:bg-red-600 text-white flex items-center justify-center transition-opacity cursor-pointer"
+                      >
+                        <X className="w-2.5 h-2.5" />
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -328,25 +364,36 @@ export const Sidebar: React.FC<SidebarProps> = ({
           {/* Joined Servers Icon List */}
           {joinedServers.map((srv) => {
             const isActive = activeView === 'server' && selectedServerId === srv.id;
+            const serverPings = pingsByServerId[srv.id] || 0;
+            const hasServerUnread = serverPings > 0 || unreadServerIds.includes(srv.id);
             return (
               <div key={srv.id} className="relative group flex items-center justify-center w-full">
-                {isActive && (
+                {isActive ? (
                   <span className="absolute left-0 w-1 h-8 bg-white rounded-r-full" />
-                )}
-                <button
-                  type="button"
-                  onClick={() => {
-                    setMobileShowHomeNav(false);
-                    onSelectServer(srv.id);
-                    if (window.innerWidth >= 1024) {
-                      setIsMobileOpen(false);
-                    }
-                  }}
-                  title={`${srv.name} (${srv.memberCount} members)`}
-                  className="cursor-pointer focus:outline-none"
-                >
-                  <ServerIconBadge server={srv} active={isActive} size="md" />
-                </button>
+                ) : hasServerUnread ? (
+                  <span className="absolute left-0 w-1 h-2.5 bg-white rounded-r-full" />
+                ) : null}
+                <div className="relative">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setMobileShowHomeNav(false);
+                      onSelectServer(srv.id);
+                      if (window.innerWidth >= 1024) {
+                        setIsMobileOpen(false);
+                      }
+                    }}
+                    title={`${srv.name} (${srv.memberCount} members)`}
+                    className="cursor-pointer focus:outline-none block"
+                  >
+                    <ServerIconBadge server={srv} active={isActive} size="md" />
+                  </button>
+                  {serverPings > 0 && (
+                    <span className="absolute -bottom-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 border-2 border-black text-white text-[10px] font-bold flex items-center justify-center font-mono tabular-nums pointer-events-none">
+                      {serverPings > 99 ? '99+' : serverPings}
+                    </span>
+                  )}
+                </div>
               </div>
             );
           })}
@@ -437,7 +484,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
               </div>
               <div className="min-w-0">
                 <span className="font-display text-xl font-extrabold tracking-tight text-white block leading-none">
-                  Pilgrim
+                  ArkLine
                 </span>
                 <span className="text-[11px] text-zinc-400 block mt-0.5 truncate">
                   Community Platform
@@ -460,6 +507,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 const renderCh = (ch: Channel) => {
                   const isVoice = ch.type === 'voice';
                   const active = ch.id === selectedChannelId;
+                  const chPings = !isVoice ? pingsByChannelId[ch.id] || 0 : 0;
                   const roomUsers = isVoice
                     ? voiceParticipants.filter((p) => p.channelId === ch.id)
                     : [];
@@ -478,6 +526,8 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         className={`w-full flex items-center justify-between gap-2 px-3 py-2.5 min-h-[44px] rounded-xl text-xs transition-colors cursor-pointer ${
                           active
                             ? 'bg-white text-zinc-950 font-semibold'
+                            : chPings > 0
+                            ? 'text-white font-bold hover:bg-zinc-900'
                             : 'text-zinc-300 hover:bg-zinc-900 hover:text-white'
                         }`}
                       >
@@ -492,6 +542,11 @@ export const Sidebar: React.FC<SidebarProps> = ({
                         {isVoice && roomUsers.length > 0 && (
                           <span className="text-[10px] font-mono opacity-75">
                             {roomUsers.length}
+                          </span>
+                        )}
+                        {!isVoice && chPings > 0 && (
+                          <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center font-mono tabular-nums shrink-0">
+                            {chPings > 99 ? '99+' : chPings}
                           </span>
                         )}
                       </button>
@@ -688,7 +743,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                   </button>
                 </div>
 
-                {friends.length > 0 && (
+                {allDmUsers.length > 0 && (
                   <div className="relative">
                     <Search className="w-3.5 h-3.5 text-zinc-500 absolute left-3 top-2.5" />
                     <input
@@ -705,7 +760,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
                 {sortedDmFriends.length === 0 ? (
                   <div className="px-2 py-4 text-center rounded-xl bg-zinc-900/40 border border-zinc-800/60">
                     <p className="text-[11px] text-zinc-400">
-                      {friends.length === 0
+                      {allDmUsers.length === 0
                         ? 'No direct messages yet.'
                         : 'No friends match your search.'}
                     </p>
@@ -826,18 +881,45 @@ export const Sidebar: React.FC<SidebarProps> = ({
               {voiceSettings.inputMode === 'ptt' && (
                 <button
                   type="button"
-                  onPointerDown={onPttHoldStart}
-                  onPointerUp={onPttHoldEnd}
+                  draggable={false}
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    e.stopPropagation();
+                  }}
+                  onTouchStart={(e) => {
+                    e.stopPropagation();
+                  }}
+                  onPointerDown={(e) => {
+                    e.preventDefault();
+                    try {
+                      e.currentTarget.setPointerCapture(e.pointerId);
+                    } catch {
+                      // ignore
+                    }
+                    onPttHoldStart();
+                  }}
+                  onPointerUp={(e) => {
+                    e.preventDefault();
+                    try {
+                      if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                        e.currentTarget.releasePointerCapture(e.pointerId);
+                      }
+                    } catch {
+                      // ignore
+                    }
+                    onPttHoldEnd();
+                  }}
                   onPointerLeave={onPttHoldEnd}
                   onPointerCancel={onPttHoldEnd}
-                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors select-none touch-none cursor-pointer border ${
+                  onLostPointerCapture={onPttHoldEnd}
+                  className={`w-full min-h-[44px] px-3 py-2 rounded-xl text-xs font-bold flex items-center justify-center gap-2 transition-colors select-none touch-none [-webkit-touch-callout:none] [-webkit-user-select:none] cursor-pointer border ${
                     activeVoice.pttActive
                       ? 'bg-emerald-500 text-zinc-950 border-emerald-400'
                       : 'bg-zinc-900 text-zinc-100 border-zinc-700 hover:bg-zinc-800'
                   }`}
                 >
-                  <Mic className="w-3.5 h-3.5" />
-                  <span>
+                  <Mic className="w-3.5 h-3.5 pointer-events-none" />
+                  <span className="pointer-events-none">
                     {activeVoice.pttActive
                       ? 'Talking...'
                       : `Hold to Talk (${formatKeybindLabel(voiceSettings.pttKey)})`}

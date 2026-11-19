@@ -1,4 +1,4 @@
-import { RolePermissions, Server, ServerRole, User, UserStatus } from '../types';
+import { ChatMessage, RolePermissions, Server, ServerRole, User, UserStatus } from '../types';
 
 export const DEFAULT_ROLE_PERMISSIONS: RolePermissions = {
   administrator: false,
@@ -112,4 +112,28 @@ export function formatKeybindLabel(code: string): string {
   if (code === 'ControlLeft' || code === 'ControlRight') return 'Ctrl';
   if (code === 'ShiftLeft' || code === 'ShiftRight') return 'Shift';
   return code;
+}
+
+export function isMessagePingForUser(
+  msg: Pick<ChatMessage, 'authorId' | 'content' | 'replyPreview'>,
+  user: Pick<User, 'id' | 'name' | 'tag'>
+): boolean {
+  if (!user || msg.authorId === user.id) return false;
+  if (msg.replyPreview) {
+    if (msg.replyPreview.authorId && msg.replyPreview.authorId === user.id) return true;
+    if (!msg.replyPreview.authorId && msg.replyPreview.authorName === user.name) return true;
+  }
+  const text = (msg.content || '').toLowerCase();
+  if (!text.includes('@')) return false;
+  if (/(^|\s)@(everyone|here)\b/i.test(text)) return true;
+
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const candidates = Array.from(
+    new Set(
+      [user.name, user.tag, user.tag.split('#')[0]]
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  return candidates.some((name) => new RegExp(`(^|\\s)@${esc(name)}(?=\\s|$|[.,!?:;])`, 'i').test(text));
 }

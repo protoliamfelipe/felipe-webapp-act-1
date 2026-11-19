@@ -16,6 +16,7 @@ import {
   ReportRecord,
   Visibility,
   GifItem,
+  NotificationSummary,
 } from '../types';
 import { localFallback } from './localFallback';
 import { searchBuiltInGifs } from '../utils/gifLibrary';
@@ -901,6 +902,36 @@ export const api = {
           body: buildBody(),
         }),
       () => localFallback.sendDirectMessage(token, friendId, payload)
+    );
+  },
+
+  async getNotificationSummary() {
+    const token = getStoredToken();
+    return withFallback(
+      () => request<NotificationSummary>('/api/notifications/summary'),
+      () => localFallback.getNotificationSummary(token)
+    );
+  },
+
+  async markDmRead(friendId: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ success: boolean }>(`/api/dms/${friendId}/read`, {
+          method: 'POST',
+        }),
+      () => localFallback.markDmRead(token, friendId)
+    );
+  },
+
+  async markChannelRead(serverId: string, channelId: string) {
+    const token = getStoredToken();
+    return withFallback(
+      () =>
+        request<{ success: boolean }>(`/api/servers/${serverId}/channels/${channelId}/read`, {
+          method: 'POST',
+        }),
+      () => localFallback.markChannelRead(token, serverId, channelId)
     );
   },
 

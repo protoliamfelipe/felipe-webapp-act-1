@@ -1,6 +1,6 @@
 {
-  "name": "Pilgrim - Tactical Gamer Community & Media Hub",
-  "description": "A modern community chat and creator media platform featuring server channels, direct messaging, video and image sharing, and privacy controls.",
+  "name": "ArkLine - Community Chat & Creator Platform",
+  "description": "ArkLine is a modern community chat and creator media platform featuring server channels, direct messaging, video and image sharing, live streaming, and privacy controls.",
   "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

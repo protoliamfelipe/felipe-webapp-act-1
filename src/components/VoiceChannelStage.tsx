@@ -420,18 +420,45 @@ export const VoiceChannelStage: React.FC<VoiceChannelStageProps> = ({
             {voiceSettings.inputMode === 'ptt' && canSpeak && (
               <button
                 type="button"
-                onPointerDown={onPttHoldStart}
-                onPointerUp={onPttHoldEnd}
+                draggable={false}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  e.stopPropagation();
+                }}
+                onTouchStart={(e) => {
+                  e.stopPropagation();
+                }}
+                onPointerDown={(e) => {
+                  e.preventDefault();
+                  try {
+                    e.currentTarget.setPointerCapture(e.pointerId);
+                  } catch {
+                    // ignore pointer capture fallback
+                  }
+                  onPttHoldStart();
+                }}
+                onPointerUp={(e) => {
+                  e.preventDefault();
+                  try {
+                    if (e.currentTarget.hasPointerCapture(e.pointerId)) {
+                      e.currentTarget.releasePointerCapture(e.pointerId);
+                    }
+                  } catch {
+                    // ignore
+                  }
+                  onPttHoldEnd();
+                }}
                 onPointerLeave={onPttHoldEnd}
                 onPointerCancel={onPttHoldEnd}
-                className={`w-full sm:w-80 min-h-[48px] px-5 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2.5 transition-colors select-none touch-none cursor-pointer border ${
+                onLostPointerCapture={onPttHoldEnd}
+                className={`w-full sm:w-80 min-h-[48px] px-5 py-3 rounded-2xl text-xs font-bold flex items-center justify-center gap-2.5 transition-colors select-none touch-none [-webkit-touch-callout:none] [-webkit-user-select:none] cursor-pointer border ${
                   activeVoice.pttActive
                     ? 'bg-emerald-500 text-zinc-950 border-emerald-400 shadow-lg shadow-emerald-500/20'
                     : 'bg-zinc-900 text-white border-zinc-700 hover:bg-zinc-800'
                 }`}
               >
-                <Mic className="w-4 h-4" />
-                <span>
+                <Mic className="w-4 h-4 pointer-events-none" />
+                <span className="pointer-events-none">
                   {activeVoice.pttActive
                     ? 'Transmitting Audio...'
                     : `Hold to Talk (${formatKeybindLabel(voiceSettings.pttKey)} or Touch)`}

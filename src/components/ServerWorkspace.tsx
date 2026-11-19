@@ -61,6 +61,7 @@ interface ServerWorkspaceProps {
   streamingUserIds?: Set<string>;
   selectedChannelId?: string | null;
   onSelectChannelId?: (channelId: string) => void;
+  pingsByChannelId?: Record<string, number>;
   incomingWsMessage: ChatMessage | null;
   incomingWsUpdatedMessage: ChatMessage | null;
   incomingWsDeletedMessageId: string | null;
@@ -109,6 +110,7 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
   streamingUserIds,
   selectedChannelId: controlledChannelId,
   onSelectChannelId,
+  pingsByChannelId = {},
   incomingWsMessage,
   incomingWsUpdatedMessage,
   incomingWsDeletedMessageId,
@@ -418,6 +420,7 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
   const renderChannelButton = (ch: Channel) => {
     const isVoice = ch.type === 'voice';
     const active = ch.id === activeChannel?.id;
+    const chPings = !isVoice ? pingsByChannelId[ch.id] || 0 : 0;
     const connectedHere =
       isVoice && activeVoice?.serverId === server.id && activeVoice?.channelId === ch.id;
     const roomUsers = isVoice ? voiceParticipants.filter((p) => p.channelId === ch.id) : [];
@@ -438,6 +441,8 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
               ? 'bg-zinc-950 text-white dark:bg-white dark:text-zinc-950 font-semibold'
               : connectedHere
               ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300 font-semibold'
+              : chPings > 0
+              ? 'text-zinc-950 dark:text-white font-bold hover:bg-zinc-200/70 dark:hover:bg-zinc-800'
               : 'text-zinc-600 dark:text-zinc-400 hover:bg-zinc-200/70 dark:hover:bg-zinc-800 hover:text-zinc-950 dark:hover:text-white'
           }`}
         >
@@ -452,6 +457,11 @@ export const ServerWorkspace: React.FC<ServerWorkspaceProps> = ({
           {isVoice && roomUsers.length > 0 && (
             <span className="text-[10px] font-mono tabular-nums opacity-75">
               {roomUsers.length}
+            </span>
+          )}
+          {!isVoice && chPings > 0 && (
+            <span className="min-w-[18px] h-[18px] px-1 rounded-full bg-red-500 text-white text-[10px] font-bold flex items-center justify-center font-mono tabular-nums shrink-0">
+              {chPings > 99 ? '99+' : chPings}
             </span>
           )}
         </button>

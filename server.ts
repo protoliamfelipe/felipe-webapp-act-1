@@ -11,7 +11,7 @@ import crypto from 'crypto';
 import { WebSocketServer, WebSocket } from 'ws';
 import { fileURLToPath } from 'url';
 import nodemailer from 'nodemailer';
-import { getGifBytesById, searchBuiltInGifs } from './src/utils/gifLibrary';
+import { getGifBytesById, searchBuiltInGifs } from './src/utils/gifLibrary.ts';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -42,6 +42,8 @@ export interface StoredUser {
   isStreaming?: boolean;
   streamTitle?: string;
   blockedUserIds: string[];
+  dmLastReadAt?: Record<string, string>;
+  channelLastReadAt?: Record<string, string>;
   createdAt: string;
 }
 
@@ -142,6 +144,7 @@ export interface ChatMessage {
   replyToMessageId?: string;
   replyPreview?: {
     id: string;
+    authorId?: string;
     authorName: string;
     content: string;
     attachmentType?: 'image' | 'audio' | 'video';
@@ -286,11 +289,66 @@ function calculateAge(birthDateStr: string): number | null {
   return age;
 }
 
+const BLACK_DENIEL_AVATAR = '/assets/aistudio/image_99d06b79.png';
+
+function migrateLegacyUsers(db: PilgrimDB): boolean {
+  let dirty = false;
+  for (const u of db.users || []) {
+    if (u.id === 'usr_pixel' || u.name === 'PixelVanguard') {
+      if (u.name !== 'BlackDeniel360' || u.tag !== 'BlackDeniel360#0777' || u.avatarUrl !== BLACK_DENIEL_AVATAR) {
+        u.name = 'BlackDeniel360';
+        u.tag = 'BlackDeniel360#0777';
+        u.avatarUrl = BLACK_DENIEL_AVATAR;
+        dirty = true;
+      }
+    }
+  }
+  for (const m of db.messages || []) {
+    if (m.authorId === 'usr_pixel' || m.authorName === 'PixelVanguard') {
+      if (m.authorName !== 'BlackDeniel360' || m.authorTag !== 'BlackDeniel360#0777' || m.authorAvatar !== BLACK_DENIEL_AVATAR) {
+        m.authorName = 'BlackDeniel360';
+        m.authorTag = 'BlackDeniel360#0777';
+        m.authorAvatar = BLACK_DENIEL_AVATAR;
+        dirty = true;
+      }
+    }
+    if (m.replyPreview && m.replyPreview.authorName === 'PixelVanguard') {
+      m.replyPreview.authorName = 'BlackDeniel360';
+      dirty = true;
+    }
+  }
+  for (const p of db.posts || []) {
+    if (p.authorId === 'usr_pixel' || p.authorName === 'PixelVanguard') {
+      if (p.authorName !== 'BlackDeniel360' || p.authorTag !== 'BlackDeniel360#0777' || p.authorAvatar !== BLACK_DENIEL_AVATAR) {
+        p.authorName = 'BlackDeniel360';
+        p.authorTag = 'BlackDeniel360#0777';
+        p.authorAvatar = BLACK_DENIEL_AVATAR;
+        dirty = true;
+      }
+    }
+    for (const c of p.comments || []) {
+      if (c.authorId === 'usr_pixel' || c.authorName === 'PixelVanguard') {
+        if (c.authorName !== 'BlackDeniel360' || c.authorTag !== 'BlackDeniel360#0777' || c.authorAvatar !== BLACK_DENIEL_AVATAR) {
+          c.authorName = 'BlackDeniel360';
+          c.authorTag = 'BlackDeniel360#0777';
+          c.authorAvatar = BLACK_DENIEL_AVATAR;
+          dirty = true;
+        }
+      }
+    }
+  }
+  return dirty;
+}
+
 function readDB(): PilgrimDB {
   try {
     if (fs.existsSync(DB_FILE)) {
       const raw = fs.readFileSync(DB_FILE, 'utf-8');
-      return JSON.parse(raw);
+      const parsed = JSON.parse(raw) as PilgrimDB;
+      if (migrateLegacyUsers(parsed)) {
+        writeDB(parsed);
+      }
+      return parsed;
     }
   } catch (err) {
     console.error('Error reading pilgrim_db.json:', err);
@@ -316,8 +374,36 @@ function writeDB(data: PilgrimDB): void {
 }
 
 function sanitizeUser(u: StoredUser) {
-  const { passwordHash: _ph, ...safe } = u;
+  const {
+    passwordHash: _ph,
+    dmLastReadAt: _dmRead,
+    channelLastReadAt: _chRead,
+    ...safe
+  } = u;
   return safe;
+}
+
+function isServerPingForUser(msg: ChatMessage, user: StoredUser): boolean {
+  if (!user || msg.authorId === user.id) return false;
+  if (msg.replyPreview) {
+    if (msg.replyPreview.authorId && msg.replyPreview.authorId === user.id) return true;
+    if (!msg.replyPreview.authorId && msg.replyPreview.authorName === user.name) return true;
+  }
+  const text = (msg.content || '').toLowerCase();
+  if (!text.includes('@')) return false;
+  if (/(^|\s)@(everyone|here)\b/i.test(text)) return true;
+
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const candidates = Array.from(
+    new Set(
+      [user.name, user.tag, user.tag.split('#')[0]]
+        .map((v) => v.trim().toLowerCase())
+        .filter(Boolean)
+    )
+  );
+  return candidates.some((name) =>
+    new RegExp(`(^|\\s)@${esc(name)}(?=\\s|$|[.,!?:;])`, 'i').test(text)
+  );
 }
 
 function getFriendIds(db: PilgrimDB, userId: string): Set<string> {
@@ -448,9 +534,7 @@ async function initializeSeedData() {
   const kitsuneAvatar = svgDataUri(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><rect width="120" height="120" fill="#f4f4f5"/><circle cx="60" cy="60" r="42" fill="#09090b"/><path d="M34 86L86 34M42 34h44v44" fill="none" stroke="#ffffff" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/></svg>`
   );
-  const pixelAvatar = svgDataUri(
-    `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><rect width="120" height="120" fill="#27272a"/><ellipse cx="60" cy="34" rx="26" ry="7" fill="none" stroke="#ffffff" stroke-width="4"/><circle cx="60" cy="64" r="18" fill="#ffffff"/><path d="M30 104c4-15 16-24 30-24s26 9 30 24" fill="#d4d4d8"/></svg>`
-  );
+  const pixelAvatar = BLACK_DENIEL_AVATAR;
   const nightfallAvatar = svgDataUri(
     `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 120"><rect width="120" height="120" fill="#09090b"/><polygon points="60,20 96,42 96,78 60,100 24,78 24,42" fill="none" stroke="#a1a1aa" stroke-width="3"/><circle cx="60" cy="52" r="15" fill="#ffffff"/><path d="M36 86c5-11 14-16 24-16s19 5 24 16" fill="#d4d4d8"/></svg>`
   );
@@ -487,8 +571,8 @@ async function initializeSeedData() {
     id: 'usr_pixel',
     email: 'pixel@pilgrim.app',
     passwordHash: demoPass,
-    name: 'PixelVanguard',
-    tag: 'PixelVanguard#0777',
+    name: 'BlackDeniel360',
+    tag: 'BlackDeniel360#0777',
     bio: 'Motion designer and tournament host. Archiving tutorials, clip reels, and weekend bracket recaps.',
     avatarUrl: pixelAvatar,
     birthDate: '1999-11-02',
@@ -549,7 +633,7 @@ async function initializeSeedData() {
   const loungeRoles = makeDefaultRoles('srv_lounge');
   const loungeServer: Server = {
     id: 'srv_lounge',
-    name: 'Pilgrim Lounge',
+    name: 'ArkLine Lounge',
     description: 'Open community hangout for introductions, daily conversations, and shared media.',
     category: 'Community & Hangout',
     iconStyle: 'shield',
@@ -624,7 +708,7 @@ async function initializeSeedData() {
       authorName: frostByte.name,
       authorTag: frostByte.tag,
       authorAvatar: frostByte.avatarUrl,
-      content: 'Welcome to Pilgrim Lounge! Drop an intro here or share your latest video post in #media-showcase.',
+      content: 'Welcome to ArkLine Lounge! Drop an intro here or share your latest video post in #media-showcase.',
       createdAt: new Date(now - 1000 * 60 * 50).toISOString(),
     },
     {
@@ -1125,7 +1209,7 @@ async function startServer() {
         return res.status(403).json({
           ageRestricted: true,
           error:
-            'Access Denied: Pilgrim requires users to be at least 13 years old. Accounts for ages 12 and below cannot be created until you reach age 13.',
+            'Access Denied: ArkLine requires users to be at least 13 years old. Accounts for ages 12 and below cannot be created until you reach age 13.',
         });
       }
 
@@ -1140,7 +1224,7 @@ async function startServer() {
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(password, salt);
 
-      const cleanBase = name.trim().replace(/[^a-zA-Z0-9]/g, '') || 'Pilgrim';
+      const cleanBase = name.trim().replace(/[^a-zA-Z0-9]/g, '') || 'ArkLine';
       const discrim = Math.floor(1000 + Math.random() * 9000);
 
       let avatarUrl = makeInitialsAvatarUri(name.trim());
@@ -1158,7 +1242,7 @@ async function startServer() {
         tag: `${cleanBase}#${discrim}`,
         bio:
           bio?.trim() ||
-          'New to Pilgrim. Exploring communities and sharing posts.',
+          'New to ArkLine. Exploring communities and sharing posts.',
         avatarUrl,
         birthDate,
         squadTitle: squadTitle?.trim() || undefined,
@@ -1251,7 +1335,7 @@ async function startServer() {
         return res.status(404).json({
           notRegistered: true,
           error:
-            'No Pilgrim account exists for that email address. Switch to Create an Account to sign up (13+ only).',
+            'No ArkLine account exists for that email address. Switch to Create an Account to sign up (13+ only).',
         });
       }
 
@@ -1270,11 +1354,11 @@ async function startServer() {
 
       const appUrl = process.env.APP_URL || 'http://localhost:3000';
       const verifyUrl = `${appUrl}/?emailToken=${encodeURIComponent(magicToken)}`;
-      const emailSubject = `Your Pilgrim sign-in code: ${code}`;
+      const emailSubject = `Your ArkLine sign-in code: ${code}`;
       const emailHtml = `
         <div style="font-family:sans-serif;max-width:480px;margin:0 auto;padding:24px;background:#09090b;color:#ffffff;border-radius:16px;">
-          <h2 style="margin:0 0 12px 0;font-size:20px;">Pilgrim Sign-In Verification</h2>
-          <p style="color:#d4d4d8;font-size:14px;line-height:1.5;">Hi ${user.name}, use the 6-digit verification code below to sign in to Pilgrim. This code expires in 10 minutes.</p>
+          <h2 style="margin:0 0 12px 0;font-size:20px;">ArkLine Sign-In Verification</h2>
+          <p style="color:#d4d4d8;font-size:14px;line-height:1.5;">Hi ${user.name}, use the 6-digit verification code below to sign in to ArkLine. This code expires in 10 minutes.</p>
           <div style="margin:20px 0;padding:16px;background:#18181b;border-radius:12px;text-align:center;font-family:monospace;font-size:28px;font-weight:700;letter-spacing:6px;color:#ffffff;">
             ${code}
           </div>
@@ -1294,7 +1378,7 @@ async function startServer() {
               'Content-Type': 'application/json',
             },
             body: JSON.stringify({
-              from: process.env.EMAIL_FROM || 'Pilgrim <onboarding@resend.dev>',
+              from: process.env.EMAIL_FROM || 'ArkLine <onboarding@resend.dev>',
               to: [normalizedEmail],
               subject: emailSubject,
               html: emailHtml,
@@ -1327,10 +1411,10 @@ async function startServer() {
             },
           });
           await transporter.sendMail({
-            from: process.env.EMAIL_FROM || `Pilgrim <${smtpUser}>`,
+            from: process.env.EMAIL_FROM || `ArkLine <${smtpUser}>`,
             to: normalizedEmail,
             subject: emailSubject,
-            text: `Hi ${user.name}, your Pilgrim sign-in code is ${code} (expires in 10 minutes).`,
+            text: `Hi ${user.name}, your ArkLine sign-in code is ${code} (expires in 10 minutes).`,
             html: emailHtml,
           });
           delivered = true;
@@ -1655,7 +1739,7 @@ async function startServer() {
     const newServer: Server = {
       id: serverId,
       name: name.trim(),
-      description: description?.trim() || 'A Pilgrim community server.',
+      description: description?.trim() || 'An ArkLine community server.',
       category: category?.trim() || 'Community',
       iconUrl: req.file ? `/uploads/${req.file.filename}` : undefined,
       iconStyle: iconStyle || 'shield',
@@ -2329,6 +2413,18 @@ async function startServer() {
       (m) => m.serverId === srv.id && m.channelId === channelId && !blocked.has(m.authorId)
     );
 
+    if (me && channelId) {
+      const latestMsg = messages[messages.length - 1];
+      const prevRead = me.channelLastReadAt?.[channelId];
+      if (latestMsg && (!prevRead || new Date(latestMsg.createdAt).getTime() > new Date(prevRead).getTime())) {
+        me.channelLastReadAt = {
+          ...(me.channelLastReadAt || {}),
+          [channelId]: new Date().toISOString(),
+        };
+        writeDB(db);
+      }
+    }
+
     const members = db.users
       .filter((u) => srv.memberIds.includes(u.id))
       .map((u) => {
@@ -2418,6 +2514,7 @@ async function startServer() {
         if (refMsg) {
           replyPreview = {
             id: refMsg.id,
+            authorId: refMsg.authorId,
             authorName: refMsg.authorName,
             content: refMsg.content || (refMsg.attachmentType ? `[${refMsg.attachmentType}]` : ''),
             attachmentType: refMsg.attachmentType,
@@ -2459,6 +2556,12 @@ async function startServer() {
       };
 
       db.messages.push(message);
+      if (message.channelId) {
+        author.channelLastReadAt = {
+          ...(author.channelLastReadAt || {}),
+          [message.channelId]: message.createdAt,
+        };
+      }
       writeDB(db);
 
       broadcastToUsers(srv.memberIds, { type: 'chat:message', message });
@@ -2614,6 +2717,18 @@ async function startServer() {
     const db = readDB();
     const dmKey = getDmKey(req.user!.id, req.params.friendId);
     const messages = db.messages.filter((m) => m.dmKey === dmKey);
+    const me = db.users.find((u) => u.id === req.user!.id);
+    if (me) {
+      const latestMsg = messages[messages.length - 1];
+      const prevRead = me.dmLastReadAt?.[req.params.friendId];
+      if (latestMsg && (!prevRead || new Date(latestMsg.createdAt).getTime() > new Date(prevRead).getTime())) {
+        me.dmLastReadAt = {
+          ...(me.dmLastReadAt || {}),
+          [req.params.friendId]: new Date().toISOString(),
+        };
+        writeDB(db);
+      }
+    }
     return res.json({ messages });
   });
 
@@ -2648,6 +2763,7 @@ async function startServer() {
         if (refMsg) {
           replyPreview = {
             id: refMsg.id,
+            authorId: refMsg.authorId,
             authorName: refMsg.authorName,
             content: refMsg.content || (refMsg.attachmentType ? `[${refMsg.attachmentType}]` : ''),
             attachmentType: refMsg.attachmentType,
@@ -2679,11 +2795,108 @@ async function startServer() {
       };
 
       db.messages.push(message);
+      author.dmLastReadAt = {
+        ...(author.dmLastReadAt || {}),
+        [friendId]: message.createdAt,
+      };
       writeDB(db);
       broadcastToUsers([author.id, friendId], { type: 'chat:message', message });
       return res.status(201).json({ message });
     }
   );
+
+  app.post('/api/dms/:friendId/read', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const me = db.users.find((u) => u.id === req.user!.id);
+    if (!me) return res.status(404).json({ error: 'User not found.' });
+    me.dmLastReadAt = {
+      ...(me.dmLastReadAt || {}),
+      [req.params.friendId]: new Date().toISOString(),
+    };
+    writeDB(db);
+    return res.json({ success: true });
+  });
+
+  app.post('/api/servers/:id/channels/:channelId/read', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const me = db.users.find((u) => u.id === req.user!.id);
+    if (!me) return res.status(404).json({ error: 'User not found.' });
+    me.channelLastReadAt = {
+      ...(me.channelLastReadAt || {}),
+      [req.params.channelId]: new Date().toISOString(),
+    };
+    writeDB(db);
+    return res.json({ success: true });
+  });
+
+  app.get('/api/notifications/summary', authMiddleware, (req: AuthRequest, res: Response) => {
+    const db = readDB();
+    const me = db.users.find((u) => u.id === req.user!.id);
+    if (!me) return res.status(404).json({ error: 'User not found.' });
+
+    const blocked = new Set(me.blockedUserIds || []);
+    const memberServerIds = new Set(
+      db.servers.filter((s) => s.memberIds.includes(me.id)).map((s) => s.id)
+    );
+
+    const unreadDmByFriendId: Record<string, number> = {};
+    const lastDmAtByFriendId: Record<string, string> = {};
+    const pingsByServerId: Record<string, number> = {};
+    const pingsByChannelId: Record<string, number> = {};
+    const unreadServerIdSet = new Set<string>();
+    const dmPartnerIds = new Set<string>();
+
+    for (const msg of db.messages) {
+      if (msg.dmKey) {
+        const parts = msg.dmKey.split('__');
+        if (!parts.includes(me.id)) continue;
+        const partnerId = parts[0] === me.id ? parts[1] : parts[0];
+        if (!partnerId || blocked.has(partnerId)) continue;
+
+        dmPartnerIds.add(partnerId);
+        const prevTs = lastDmAtByFriendId[partnerId];
+        if (!prevTs || new Date(msg.createdAt).getTime() > new Date(prevTs).getTime()) {
+          lastDmAtByFriendId[partnerId] = msg.createdAt;
+        }
+
+        if (msg.authorId !== me.id) {
+          const lastRead = me.dmLastReadAt?.[partnerId];
+          if (!lastRead || new Date(msg.createdAt).getTime() > new Date(lastRead).getTime()) {
+            unreadDmByFriendId[partnerId] = (unreadDmByFriendId[partnerId] || 0) + 1;
+          }
+        }
+      } else if (msg.serverId && msg.channelId && memberServerIds.has(msg.serverId)) {
+        if (blocked.has(msg.authorId) || msg.authorId === me.id) continue;
+        const lastRead = me.channelLastReadAt?.[msg.channelId];
+        if (!lastRead || new Date(msg.createdAt).getTime() > new Date(lastRead).getTime()) {
+          unreadServerIdSet.add(msg.serverId);
+          if (isServerPingForUser(msg, me)) {
+            pingsByChannelId[msg.channelId] = (pingsByChannelId[msg.channelId] || 0) + 1;
+            pingsByServerId[msg.serverId] = (pingsByServerId[msg.serverId] || 0) + 1;
+          }
+        }
+      }
+    }
+
+    const dmSenders = db.users
+      .filter((u) => dmPartnerIds.has(u.id))
+      .map((u) => {
+        const safe = sanitizeUser(u);
+        if (safe.id !== me.id && safe.status === 'invisible') {
+          safe.status = undefined;
+        }
+        return safe;
+      });
+
+    return res.json({
+      unreadDmByFriendId,
+      lastDmAtByFriendId,
+      dmSenders,
+      pingsByServerId,
+      pingsByChannelId,
+      unreadServerIds: Array.from(unreadServerIdSet),
+    });
+  });
 
   // --- MESSAGE INTERACTIONS (EDIT, DELETE, REACT, PIN, BOOKMARK) ---
 
@@ -3192,7 +3405,7 @@ async function startServer() {
     }
 
     writeDB(db);
-    return res.status(201).json({ report, message: 'Report submitted to Pilgrim Safety Team.' });
+    return res.status(201).json({ report, message: 'Report submitted to ArkLine Safety Team.' });
   });
 
   app.get('/api/reports/mine', authMiddleware, (req: AuthRequest, res: Response) => {
@@ -3233,7 +3446,7 @@ async function startServer() {
   }
 
   server.listen(PORT, '0.0.0.0', () => {
-    console.log(`Pilgrim server running at http://localhost:${PORT}`);
+    console.log(`ArkLine server running at http://localhost:${PORT}`);
   });
 }
 

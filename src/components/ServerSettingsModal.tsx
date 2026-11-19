@@ -546,7 +546,7 @@ export const ServerSettingsModal: React.FC<ServerSettingsModalProps> = ({
                       />
                     </div>
                     <p className="text-[11px] text-zinc-500 dark:text-zinc-400">
-                      When no icon is uploaded, Pilgrim displays your server&apos;s first letter.
+                      When no icon is uploaded, ArkLine displays your server&apos;s first letter.
                     </p>
                   </div>
                 </div>

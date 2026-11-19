@@ -15,12 +15,14 @@ import {
   FriendsOverview,
   ReportRecord,
   Visibility,
+  NotificationSummary,
 } from '../types';
 import { makeInitialsAvatar } from '../utils/avatars';
 import {
   createDefaultRolesForServer,
   DEFAULT_ROLE_PERMISSIONS,
   hasServerPermission,
+  isMessagePingForUser,
 } from '../utils/permissions';
 
 const LOCAL_DB_KEY = 'pilgrim_local_db_v4';
@@ -50,6 +52,18 @@ function writeLocalVoice(list: VoiceParticipant[]) {
   }
 }
 
+function broadcastLocalChatMessage(message: ChatMessage) {
+  try {
+    if (typeof BroadcastChannel !== 'undefined') {
+      const ch = new BroadcastChannel('pilgrim_realtime_sync');
+      ch.postMessage({ type: 'chat:message', message });
+      ch.close();
+    }
+  } catch {
+    // ignore
+  }
+}
+
 const localEmailChallenges = new Map<
   string,
   { code: string; magicToken: string; userId: string; expiresAt: number }
@@ -57,6 +71,8 @@ const localEmailChallenges = new Map<
 
 interface LocalUser extends User {
   password: string;
+  dmLastReadAt?: Record<string, string>;
+  channelLastReadAt?: Record<string, string>;
 }
 
 interface LocalFriendRequest {
@@ -118,7 +134,12 @@ function fileToDataUrl(file: File): Promise<string> {
 }
 
 function sanitize(u: LocalUser): User {
-  const { password: _pw, ...safe } = u;
+  const {
+    password: _pw,
+    dmLastReadAt: _dmRead,
+    channelLastReadAt: _chRead,
+    ...safe
+  } = u;
   return safe;
 }
 
@@ -179,10 +200,10 @@ function createInitialLocalDB(): LocalDB {
     id: 'usr_pixel',
     email: 'pixel@pilgrim.app',
     password: 'password123',
-    name: 'PixelVanguard',
-    tag: 'PixelVanguard#0777',
+    name: 'BlackDeniel360',
+    tag: 'BlackDeniel360#0777',
     bio: 'Motion designer and tournament host. Archiving tutorials, clip reels, and weekend bracket recaps.',
-    avatarUrl: makeInitialsAvatar('PixelVanguard'),
+    avatarUrl: '/assets/aistudio/image_99d06b79.png',
     birthDate: '1999-11-21',
     status: 'idle',
     blockedUserIds: [],
@@ -210,7 +231,7 @@ function createInitialLocalDB(): LocalDB {
   const servers: Server[] = [
     {
       id: 'srv_lounge',
-      name: 'Pilgrim Lounge',
+      name: 'ArkLine Lounge',
       description: 'Open community hangout for introductions, daily conversations, and shared media.',
       category: 'Community & Hangout',
       iconStyle: 'shield',
@@ -278,7 +299,7 @@ function createInitialLocalDB(): LocalDB {
       authorName: frostByte.name,
       authorTag: frostByte.tag,
       authorAvatar: frostByte.avatarUrl,
-      content: 'Welcome to Pilgrim Lounge! Drop an intro here or share your latest video post in #media-showcase.',
+      content: 'Welcome to ArkLine Lounge! Drop an intro here or share your latest video post in #media-showcase.',
       reactions: { '👋': [kitsuneDrift.id] },
       pinned: true,
       bookmarkedByUserIds: [],
@@ -388,6 +409,53 @@ function createInitialLocalDB(): LocalDB {
   return { users: [frostByte, kitsuneDrift, pixelVanguard, nightfallGG], servers, messages, posts, friendRequests, reports: [] };
 }
 
+const BLACK_DENIEL_AVATAR = '/assets/aistudio/image_99d06b79.png';
+
+function migrateLocalLegacyUsers(db: LocalDB): boolean {
+  let dirty = false;
+  for (const u of db.users || []) {
+    if (u.id === 'usr_pixel' || u.name === 'PixelVanguard') {
+      if (u.name !== 'BlackDeniel360' || u.tag !== 'BlackDeniel360#0777' || u.avatarUrl !== BLACK_DENIEL_AVATAR) {
+        u.name = 'BlackDeniel360';
+        u.tag = 'BlackDeniel360#0777';
+        u.avatarUrl = BLACK_DENIEL_AVATAR;
+        dirty = true;
+      }
+    }
+  }
+  for (const m of db.messages || []) {
+    if (m.authorId === 'usr_pixel' || m.authorName === 'PixelVanguard') {
+      if (m.authorName !== 'BlackDeniel360' || m.authorTag !== 'BlackDeniel360#0777' || m.authorAvatar !== BLACK_DENIEL_AVATAR) {
+        m.authorName = 'BlackDeniel360';
+        m.authorTag = 'BlackDeniel360#0777';
+        m.authorAvatar = BLACK_DENIEL_AVATAR;
+        dirty = true;
+      }
+    }
+  }
+  for (const p of db.posts || []) {
+    if (p.authorId === 'usr_pixel' || p.authorName === 'PixelVanguard') {
+      if (p.authorName !== 'BlackDeniel360' || p.authorTag !== 'BlackDeniel360#0777' || p.authorAvatar !== BLACK_DENIEL_AVATAR) {
+        p.authorName = 'BlackDeniel360';
+        p.authorTag = 'BlackDeniel360#0777';
+        p.authorAvatar = BLACK_DENIEL_AVATAR;
+        dirty = true;
+      }
+    }
+    for (const c of p.comments || []) {
+      if (c.authorId === 'usr_pixel' || c.authorName === 'PixelVanguard') {
+        if (c.authorName !== 'BlackDeniel360' || c.authorTag !== 'BlackDeniel360#0777' || c.authorAvatar !== BLACK_DENIEL_AVATAR) {
+          c.authorName = 'BlackDeniel360';
+          c.authorTag = 'BlackDeniel360#0777';
+          c.authorAvatar = BLACK_DENIEL_AVATAR;
+          dirty = true;
+        }
+      }
+    }
+  }
+  return dirty;
+}
+
 function readLocalDB(): LocalDB {
   try {
     localStorage.removeItem('pilgrim_local_db_v1');
@@ -397,6 +465,9 @@ function readLocalDB(): LocalDB {
     if (raw) {
       const parsed = JSON.parse(raw) as LocalDB;
       if (parsed && Array.isArray(parsed.users) && parsed.users.length > 0) {
+        if (migrateLocalLegacyUsers(parsed)) {
+          writeLocalDB(parsed);
+        }
         return parsed;
       }
     }
@@ -474,7 +545,7 @@ export const localFallback = {
     }
     if (age <= 12) {
       throw new Error(
-        'Access Denied: Pilgrim requires users to be at least 13 years old. Accounts for ages 12 and below cannot be created until you reach age 13.'
+        'Access Denied: ArkLine requires users to be at least 13 years old. Accounts for ages 12 and below cannot be created until you reach age 13.'
       );
     }
 
@@ -484,7 +555,7 @@ export const localFallback = {
       throw new Error('An account with this email already exists. Please sign in.');
     }
 
-    const cleanBase = data.name.trim().replace(/[^a-zA-Z0-9]/g, '') || 'Pilgrim';
+    const cleanBase = data.name.trim().replace(/[^a-zA-Z0-9]/g, '') || 'ArkLine';
     const discrim = Math.floor(1000 + Math.random() * 9000);
 
     let avatarUrl = makeInitialsAvatar(data.name.trim());
@@ -500,7 +571,7 @@ export const localFallback = {
       password: data.password,
       name: data.name.trim(),
       tag: `${cleanBase}#${discrim}`,
-      bio: data.bio?.trim() || 'New to Pilgrim. Exploring communities and sharing posts.',
+      bio: data.bio?.trim() || 'New to ArkLine. Exploring communities and sharing posts.',
       avatarUrl,
       birthDate: data.birthDate,
       squadTitle: data.squadTitle?.trim() || undefined,
@@ -741,7 +812,7 @@ export const localFallback = {
     const srv: Server = {
       id: serverId,
       name: data.name.trim(),
-      description: data.description.trim() || 'A Pilgrim gaming community server.',
+      description: data.description.trim() || 'An ArkLine gaming community server.',
       category: data.category?.trim() || 'Community',
       iconUrl,
       iconStyle: data.iconStyle || 'monogram',
@@ -1276,6 +1347,15 @@ export const localFallback = {
     const messages = db.messages.filter(
       (m) => m.serverId === serverId && m.channelId === channelId && !blocked.has(m.authorId)
     );
+    const latestMsg = messages[messages.length - 1];
+    const prevRead = me.channelLastReadAt?.[channelId];
+    if (latestMsg && (!prevRead || new Date(latestMsg.createdAt).getTime() > new Date(prevRead).getTime())) {
+      me.channelLastReadAt = {
+        ...(me.channelLastReadAt || {}),
+        [channelId]: new Date().toISOString(),
+      };
+      writeLocalDB(db);
+    }
     const members = db.users
       .filter((u) => srv.memberIds.includes(u.id))
       .map((u) => {
@@ -1337,6 +1417,7 @@ export const localFallback = {
       if (refMsg) {
         replyPreview = {
           id: refMsg.id,
+          authorId: refMsg.authorId,
           authorName: refMsg.authorName,
           content: refMsg.content || (refMsg.attachmentType ? `[${refMsg.attachmentType}]` : ''),
           attachmentType: refMsg.attachmentType,
@@ -1377,8 +1458,13 @@ export const localFallback = {
       createdAt: new Date().toISOString(),
     };
     db.messages.push(message);
+    me.channelLastReadAt = {
+      ...(me.channelLastReadAt || {}),
+      [data.channelId]: message.createdAt,
+    };
     if (sharedPost) sharedPost.sharesCount = (sharedPost.sharesCount || 0) + 1;
     writeLocalDB(db);
+    broadcastLocalChatMessage(message);
     return { message };
   },
 
@@ -1478,7 +1564,17 @@ export const localFallback = {
     const db = readLocalDB();
     const me = requireLocalUser(db, token);
     const dmKey = [me.id, friendId].sort().join('__');
-    return { messages: db.messages.filter((m) => m.dmKey === dmKey) };
+    const messages = db.messages.filter((m) => m.dmKey === dmKey);
+    const latestMsg = messages[messages.length - 1];
+    const prevRead = me.dmLastReadAt?.[friendId];
+    if (latestMsg && (!prevRead || new Date(latestMsg.createdAt).getTime() > new Date(prevRead).getTime())) {
+      me.dmLastReadAt = {
+        ...(me.dmLastReadAt || {}),
+        [friendId]: new Date().toISOString(),
+      };
+      writeLocalDB(db);
+    }
+    return { messages };
   },
 
   async sendDirectMessage(
@@ -1513,6 +1609,7 @@ export const localFallback = {
       if (refMsg) {
         replyPreview = {
           id: refMsg.id,
+          authorId: refMsg.authorId,
           authorName: refMsg.authorName,
           content: refMsg.content || (refMsg.attachmentType ? `[${refMsg.attachmentType}]` : ''),
           attachmentType: refMsg.attachmentType,
@@ -1541,8 +1638,102 @@ export const localFallback = {
       createdAt: new Date().toISOString(),
     };
     db.messages.push(message);
+    me.dmLastReadAt = {
+      ...(me.dmLastReadAt || {}),
+      [friendId]: message.createdAt,
+    };
     writeLocalDB(db);
+    broadcastLocalChatMessage(message);
     return { message };
+  },
+
+  async markDmRead(token: string | null, friendId: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    me.dmLastReadAt = {
+      ...(me.dmLastReadAt || {}),
+      [friendId]: new Date().toISOString(),
+    };
+    writeLocalDB(db);
+    return { success: true };
+  },
+
+  async markChannelRead(token: string | null, _serverId: string, channelId: string) {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    me.channelLastReadAt = {
+      ...(me.channelLastReadAt || {}),
+      [channelId]: new Date().toISOString(),
+    };
+    writeLocalDB(db);
+    return { success: true };
+  },
+
+  async getNotificationSummary(token: string | null): Promise<NotificationSummary> {
+    const db = readLocalDB();
+    const me = requireLocalUser(db, token);
+    const blocked = new Set(me.blockedUserIds || []);
+    const memberServerIds = new Set(
+      db.servers.filter((s) => s.memberIds.includes(me.id)).map((s) => s.id)
+    );
+
+    const unreadDmByFriendId: Record<string, number> = {};
+    const lastDmAtByFriendId: Record<string, string> = {};
+    const pingsByServerId: Record<string, number> = {};
+    const pingsByChannelId: Record<string, number> = {};
+    const unreadServerIdSet = new Set<string>();
+    const dmPartnerIds = new Set<string>();
+
+    for (const msg of db.messages) {
+      if (msg.dmKey) {
+        const parts = msg.dmKey.split('__');
+        if (!parts.includes(me.id)) continue;
+        const partnerId = parts[0] === me.id ? parts[1] : parts[0];
+        if (!partnerId || blocked.has(partnerId)) continue;
+
+        dmPartnerIds.add(partnerId);
+        const prevTs = lastDmAtByFriendId[partnerId];
+        if (!prevTs || new Date(msg.createdAt).getTime() > new Date(prevTs).getTime()) {
+          lastDmAtByFriendId[partnerId] = msg.createdAt;
+        }
+
+        if (msg.authorId !== me.id) {
+          const lastRead = me.dmLastReadAt?.[partnerId];
+          if (!lastRead || new Date(msg.createdAt).getTime() > new Date(lastRead).getTime()) {
+            unreadDmByFriendId[partnerId] = (unreadDmByFriendId[partnerId] || 0) + 1;
+          }
+        }
+      } else if (msg.serverId && msg.channelId && memberServerIds.has(msg.serverId)) {
+        if (blocked.has(msg.authorId) || msg.authorId === me.id) continue;
+        const lastRead = me.channelLastReadAt?.[msg.channelId];
+        if (!lastRead || new Date(msg.createdAt).getTime() > new Date(lastRead).getTime()) {
+          unreadServerIdSet.add(msg.serverId);
+          if (isMessagePingForUser(msg, me)) {
+            pingsByChannelId[msg.channelId] = (pingsByChannelId[msg.channelId] || 0) + 1;
+            pingsByServerId[msg.serverId] = (pingsByServerId[msg.serverId] || 0) + 1;
+          }
+        }
+      }
+    }
+
+    const dmSenders = db.users
+      .filter((u) => dmPartnerIds.has(u.id))
+      .map((u) => {
+        const safe = sanitize(u);
+        if (safe.id !== me.id && safe.status === 'invisible') {
+          safe.status = undefined;
+        }
+        return safe;
+      });
+
+    return {
+      unreadDmByFriendId,
+      lastDmAtByFriendId,
+      dmSenders,
+      pingsByServerId,
+      pingsByChannelId,
+      unreadServerIds: Array.from(unreadServerIdSet),
+    };
   },
 
   async editMessage(token: string | null, messageId: string, content: string) {
@@ -1864,7 +2055,7 @@ export const localFallback = {
       me.blockedUserIds.push(data.targetUserId);
     }
     writeLocalDB(db);
-    return { report, message: 'Report submitted to Pilgrim Safety Team.' };
+    return { report, message: 'Report submitted to ArkLine Safety Team.' };
   },
 
   async getMyReports(token: string | null) {

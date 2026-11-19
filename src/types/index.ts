@@ -118,6 +118,7 @@ export interface Server {
 
 export interface ChatMessageReplyPreview {
   id: string;
+  authorId?: string;
   authorName: string;
   content: string;
   attachmentType?: 'image' | 'audio' | 'video';
@@ -232,7 +233,7 @@ export interface FriendsOverview {
 
 export interface AppNotification {
   id: string;
-  kind: 'dm' | 'server_message' | 'reaction' | 'friend_request' | 'friend_accept' | 'system';
+  kind: 'dm' | 'mention' | 'server_message' | 'reaction' | 'friend_request' | 'friend_accept' | 'system';
   title: string;
   body: string;
   avatarUrl?: string;
@@ -242,6 +243,15 @@ export interface AppNotification {
   channelId?: string;
   friendId?: string;
   messageId?: string;
+}
+
+export interface NotificationSummary {
+  unreadDmByFriendId: Record<string, number>;
+  lastDmAtByFriendId: Record<string, string>;
+  dmSenders: User[];
+  pingsByServerId: Record<string, number>;
+  pingsByChannelId: Record<string, number>;
+  unreadServerIds: string[];
 }
 
 export interface GifItem {

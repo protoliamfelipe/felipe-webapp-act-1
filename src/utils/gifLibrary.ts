@@ -1,4 +1,4 @@
-import { GifItem } from '../types';
+import type { GifItem } from '../types/index.ts';
 
 /**
  * Pure TypeScript multi-frame GIF89a generator.

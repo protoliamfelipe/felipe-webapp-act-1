@@ -40,7 +40,7 @@ export const SafetyView: React.FC<SafetyViewProps> = ({ currentUser, onUserUpdat
               Safety & Bad Actor Reports
             </h1>
             <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 max-w-2xl">
-              Pilgrim helps keep servers and profiles welcoming. You can report any post, comment, message, or user using the flag icon, and review your submitted reports or blocked accounts here.
+              ArkLine helps keep servers and profiles welcoming. You can report any post, comment, message, or user using the flag icon, and review your submitted reports or blocked accounts here.
             </p>
           </div>
         </div>

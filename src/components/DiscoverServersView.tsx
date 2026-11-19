@@ -30,7 +30,7 @@ export const DiscoverServersView: React.FC<DiscoverServersViewProps> = ({
         <div className="relative z-10 max-w-2xl space-y-4">
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-white/10 border border-white/15 text-[11px] font-semibold text-zinc-200">
             <Compass className="w-3.5 h-3.5" />
-            <span>Discover Communities on Pilgrim</span>
+            <span>Discover Communities on ArkLine</span>
           </div>
           <h1 className="font-display text-2xl sm:text-3xl font-extrabold tracking-tight">
             Find your community servers
@@ -112,7 +112,7 @@ export const DiscoverServersView: React.FC<DiscoverServersViewProps> = ({
                     {srv.name}
                   </h3>
                   <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-1 line-clamp-2 flex-1">
-                    {srv.description || 'Community server on Pilgrim.'}
+                    {srv.description || 'Community server on ArkLine.'}
                   </p>
                   <div className="pt-4 mt-3 border-t border-zinc-100 dark:border-zinc-800 flex items-center justify-between gap-2">
                     <span className="inline-flex items-center gap-1.5 text-[11px] font-mono text-zinc-500 dark:text-zinc-400">

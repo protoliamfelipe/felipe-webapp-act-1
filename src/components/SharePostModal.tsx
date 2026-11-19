@@ -99,14 +99,14 @@ export const SharePostModal: React.FC<SharePostModalProps> = ({
           </div>
         </div>
 
-        {/* Share directly to a Pilgrim Server */}
+        {/* Share directly to an ArkLine Server */}
         {joinedServers.length > 0 && (
           <form
             onSubmit={handleShareToServer}
             className="pt-4 border-t border-zinc-200 dark:border-zinc-800 space-y-3"
           >
             <label className="block text-xs font-semibold text-zinc-700 dark:text-zinc-300">
-              Share to a Pilgrim Server
+              Share to an ArkLine Server
             </label>
             <select
               value={selectedServerId}

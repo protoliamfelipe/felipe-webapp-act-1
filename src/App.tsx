@@ -1,7 +1,5 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { motion, AnimatePresence } from 'motion/react';
 import {
-  CheckCircle2,
   Plus,
   Video,
   Image as ImageIcon,
@@ -29,7 +27,7 @@ import {
 import { api, getStoredToken, clearStoredAuth } from './services/api';
 import { localFallback } from './services/localFallback';
 import { makeInitialsAvatar } from './utils/avatars';
-import { hasServerPermission } from './utils/permissions';
+import { hasServerPermission, isMessagePingForUser } from './utils/permissions';
 import {
   playVcJoinSound,
   playVcLeaveSound,
@@ -156,7 +154,12 @@ export default function App() {
   });
   const [activeDmFriendId, setActiveDmFriendId] = useState<string | null>(null);
   const [unreadDmByFriendId, setUnreadDmByFriendId] = useState<Record<string, number>>({});
+  const [lastDmAtByFriendId, setLastDmAtByFriendId] = useState<Record<string, string>>({});
+  const [pingsByServerId, setPingsByServerId] = useState<Record<string, number>>({});
+  const [pingsByChannelId, setPingsByChannelId] = useState<Record<string, number>>({});
+  const [unreadServerIds, setUnreadServerIds] = useState<string[]>([]);
   const [dmPopupFriendIds, setDmPopupFriendIds] = useState<string[]>([]);
+  const [dmSendersById, setDmSendersById] = useState<Record<string, User>>({});
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
 
   // Modals & Invite Handling
@@ -173,7 +176,6 @@ export default function App() {
   const [reportTarget, setReportTarget] = useState<ReportTarget | null>(null);
   const [sharePostTarget, setSharePostTarget] = useState<Post | null>(null);
   const [forwardMessageTarget, setForwardMessageTarget] = useState<ChatMessage | null>(null);
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
 
   // Live Streaming State
   const [localVideoStream, setLocalVideoStream] = useState<MediaStream | null>(null);
@@ -202,6 +204,9 @@ export default function App() {
   const selectedServerIdRef = useRef<string | null>(selectedServerId);
   const selectedChannelIdRef = useRef<string | null>(selectedChannelId);
   const voiceParticipantsRef = useRef<Record<string, VoiceParticipant[]>>(voiceParticipantsByServer);
+  const serverSearchRef = useRef(serverSearch);
+  const friendsDataRef = useRef(friendsData);
+  const dismissedDmPopupsRef = useRef<Record<string, number>>({});
   const reminderTimersRef = useRef<number[]>([]);
 
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -244,6 +249,12 @@ export default function App() {
   useEffect(() => {
     voiceParticipantsRef.current = voiceParticipantsByServer;
   }, [voiceParticipantsByServer]);
+  useEffect(() => {
+    serverSearchRef.current = serverSearch;
+  }, [serverSearch]);
+  useEffect(() => {
+    friendsDataRef.current = friendsData;
+  }, [friendsData]);
 
   // Open invite modal automatically once authenticated if ?invite=CODE was visited
   useEffect(() => {
@@ -275,11 +286,8 @@ export default function App() {
     }
   }, [selectedServerId, servers, selectedChannelId]);
 
-  const showToast = useCallback((msg: string) => {
-    setToastMsg(msg);
-    setTimeout(() => {
-      setToastMsg((prev) => (prev === msg ? null : prev));
-    }, 3200);
+  const showToast = useCallback((_msg: string) => {
+    // Floating pill toast notifications disabled
   }, []);
 
   const sendWs = useCallback((payload: unknown) => {
@@ -301,11 +309,51 @@ export default function App() {
   }, []);
 
   const clearDmUnread = useCallback((friendId: string) => {
+    delete dismissedDmPopupsRef.current[friendId];
     setUnreadDmByFriendId((prev) => {
       if (!prev[friendId]) return prev;
       const next = { ...prev };
       delete next[friendId];
       return next;
+    });
+    api.markDmRead(friendId).catch(() => {});
+  }, []);
+
+  const clearChannelPings = useCallback((serverId: string, channelId: string) => {
+    setPingsByChannelId((prev) => {
+      if (!prev[channelId]) return prev;
+      const next = { ...prev };
+      delete next[channelId];
+      const srv = serversRef.current.find((s) => s.id === serverId);
+      if (srv) {
+        const remaining = srv.channels.reduce((sum, ch) => sum + (next[ch.id] || 0), 0);
+        setPingsByServerId((srvPrev) => {
+          const srvNext = { ...srvPrev };
+          if (remaining > 0) srvNext[serverId] = remaining;
+          else delete srvNext[serverId];
+          return srvNext;
+        });
+      }
+      return next;
+    });
+    api.markChannelRead(serverId, channelId).catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    if (!user || activeView !== 'server' || !selectedServerId || !selectedChannelId) return;
+    const srv = serversRef.current.find((s) => s.id === selectedServerId);
+    const ch = srv?.channels.find((c) => c.id === selectedChannelId);
+    if (ch && ch.type !== 'voice') {
+      clearChannelPings(selectedServerId, selectedChannelId);
+    }
+  }, [user?.id, activeView, selectedServerId, selectedChannelId, clearChannelPings]);
+
+  const touchDmTimestamp = useCallback((friendId: string, timestamp?: string) => {
+    const ts = timestamp || new Date().toISOString();
+    setLastDmAtByFriendId((prev) => {
+      const existing = prev[friendId];
+      if (existing && new Date(existing).getTime() >= new Date(ts).getTime()) return prev;
+      return { ...prev, [friendId]: ts };
     });
   }, []);
 
@@ -334,32 +382,84 @@ export default function App() {
         selectedServerIdRef.current === msg.serverId &&
         selectedChannelIdRef.current === msg.channelId;
 
-      if (isDm && !isViewingThisDm) {
-        setUnreadDmByFriendId((prev) => ({
+      if (isDm) {
+        touchDmTimestamp(msg.authorId, msg.createdAt);
+        setDmSendersById((prev) => ({
           ...prev,
-          [msg.authorId]: (prev[msg.authorId] || 0) + 1,
+          [msg.authorId]: {
+            ...(prev[msg.authorId] || {}),
+            id: msg.authorId,
+            name: msg.authorName,
+            tag: msg.authorTag,
+            avatarUrl: msg.authorAvatar,
+            status: prev[msg.authorId]?.status || 'online',
+            isStreaming:
+              prev[msg.authorId]?.isStreaming ?? Boolean(streamingUsersMap[msg.authorId]?.isStreaming),
+            createdAt: prev[msg.authorId]?.createdAt || msg.createdAt,
+          },
         }));
-        setDmPopupFriendIds((prev) => [msg.authorId, ...prev.filter((id) => id !== msg.authorId)].slice(0, 8));
-        addNotification({
-          kind: 'dm',
-          title: `DM from ${msg.authorName}`,
-          body: preview,
-          avatarUrl: msg.authorAvatar,
-          friendId: msg.authorId,
-          messageId: msg.id,
-        });
-      } else if (!isDm && !isViewingThisChannel) {
+
+        if (!isViewingThisDm) {
+          delete dismissedDmPopupsRef.current[msg.authorId];
+          setUnreadDmByFriendId((prev) => ({
+            ...prev,
+            [msg.authorId]: (prev[msg.authorId] || 0) + 1,
+          }));
+          setDmPopupFriendIds((prev) => [msg.authorId, ...prev.filter((id) => id !== msg.authorId)].slice(0, 8));
+          addNotification({
+            kind: 'dm',
+            title: `DM from ${msg.authorName}`,
+            body: preview,
+            avatarUrl: msg.authorAvatar,
+            friendId: msg.authorId,
+            messageId: msg.id,
+          });
+        } else {
+          api.markDmRead(msg.authorId).catch(() => {});
+        }
+      } else if (!isViewingThisChannel) {
         const srv = serversRef.current.find((s) => s.id === msg.serverId);
         const ch = srv?.channels.find((c) => c.id === msg.channelId);
-        addNotification({
-          kind: 'server_message',
-          title: `${msg.authorName}${ch ? ` in #${ch.name}` : ''}`,
-          body: preview,
-          avatarUrl: msg.authorAvatar,
-          serverId: msg.serverId,
-          channelId: msg.channelId,
-          messageId: msg.id,
-        });
+        const isPing = isMessagePingForUser(msg, me);
+
+        if (msg.serverId) {
+          const sid = msg.serverId;
+          setUnreadServerIds((prev) => (prev.includes(sid) ? prev : [...prev, sid]));
+        }
+
+        if (isPing && msg.serverId && msg.channelId) {
+          const cid = msg.channelId;
+          const sid = msg.serverId;
+          setPingsByChannelId((prev) => ({
+            ...prev,
+            [cid]: (prev[cid] || 0) + 1,
+          }));
+          setPingsByServerId((prev) => ({
+            ...prev,
+            [sid]: (prev[sid] || 0) + 1,
+          }));
+          addNotification({
+            kind: 'mention',
+            title: `Ping from ${msg.authorName}${ch ? ` in #${ch.name}` : ''}`,
+            body: preview,
+            avatarUrl: msg.authorAvatar,
+            serverId: msg.serverId,
+            channelId: msg.channelId,
+            messageId: msg.id,
+          });
+        } else {
+          addNotification({
+            kind: 'server_message',
+            title: `${msg.authorName}${ch ? ` in #${ch.name}` : ''}`,
+            body: preview,
+            avatarUrl: msg.authorAvatar,
+            serverId: msg.serverId,
+            channelId: msg.channelId,
+            messageId: msg.id,
+          });
+        }
+      } else if (msg.serverId && msg.channelId) {
+        api.markChannelRead(msg.serverId, msg.channelId).catch(() => {});
       }
 
       const status: UserStatus = me.status || 'online';
@@ -382,7 +482,7 @@ export default function App() {
           document.hidden
         ) {
           try {
-            new Notification(`Pilgrim · ${msg.authorName}`, {
+            new Notification(`ArkLine · ${msg.authorName}`, {
               body: preview,
             });
           } catch {
@@ -391,7 +491,7 @@ export default function App() {
         }
       }
     },
-    [showToast, addNotification]
+    [showToast, addNotification, touchDmTimestamp]
   );
 
   // Voice Media Cleanup
@@ -638,13 +738,95 @@ export default function App() {
     setFriendsData(res);
   }, []);
 
-  // Initial Data Load when signed in
+  const loadNotificationSummary = useCallback(async () => {
+    if (!userRef.current) return;
+    try {
+      const summary = await api.getNotificationSummary();
+      const viewingDmId =
+        activeViewRef.current === 'friends' ? activeDmFriendIdRef.current : null;
+      const viewingChId =
+        activeViewRef.current === 'server' ? selectedChannelIdRef.current : null;
+
+      setLastDmAtByFriendId((prev) => {
+        const merged = { ...prev };
+        for (const [fid, ts] of Object.entries(summary.lastDmAtByFriendId || {})) {
+          if (!merged[fid] || new Date(ts).getTime() > new Date(merged[fid]).getTime()) {
+            merged[fid] = ts;
+          }
+        }
+        return merged;
+      });
+
+      if (summary.dmSenders?.length) {
+        setDmSendersById((prev) => {
+          const next = { ...prev };
+          for (const sender of summary.dmSenders) {
+            next[sender.id] = { ...(next[sender.id] || {}), ...sender };
+          }
+          return next;
+        });
+      }
+
+      const nextUnreadDm = { ...(summary.unreadDmByFriendId || {}) };
+      if (viewingDmId && nextUnreadDm[viewingDmId]) {
+        delete nextUnreadDm[viewingDmId];
+        api.markDmRead(viewingDmId).catch(() => {});
+      }
+      setUnreadDmByFriendId(nextUnreadDm);
+
+      const nextChPings = { ...(summary.pingsByChannelId || {}) };
+      if (viewingChId && nextChPings[viewingChId]) {
+        delete nextChPings[viewingChId];
+        if (selectedServerIdRef.current) {
+          api.markChannelRead(selectedServerIdRef.current, viewingChId).catch(() => {});
+        }
+      }
+      setPingsByChannelId(nextChPings);
+
+      const nextSrvPings: Record<string, number> = {};
+      for (const srv of serversRef.current) {
+        const sum = srv.channels.reduce((acc, ch) => acc + (nextChPings[ch.id] || 0), 0);
+        if (sum > 0) nextSrvPings[srv.id] = sum;
+      }
+      for (const [sid, cnt] of Object.entries(summary.pingsByServerId || {})) {
+        if (!serversRef.current.some((s) => s.id === sid) && cnt > 0) {
+          nextSrvPings[sid] = cnt;
+        }
+      }
+      setPingsByServerId(nextSrvPings);
+      setUnreadServerIds(summary.unreadServerIds || []);
+
+      const activePopupIds = Object.entries(nextUnreadDm)
+        .filter(([fid, count]) => count > 0 && count > (dismissedDmPopupsRef.current[fid] || 0))
+        .sort((a, b) => {
+          const ta = Date.parse(summary.lastDmAtByFriendId?.[a[0]] || '') || 0;
+          const tb = Date.parse(summary.lastDmAtByFriendId?.[b[0]] || '') || 0;
+          return tb - ta;
+        })
+        .map(([fid]) => fid);
+
+      if (activePopupIds.length > 0) {
+        setDmPopupFriendIds((prev) =>
+          Array.from(new Set([...activePopupIds, ...prev]))
+            .filter((fid) => fid !== viewingDmId)
+            .slice(0, 8)
+        );
+      }
+    } catch {
+      // Ignore transient summary errors
+    }
+  }, []);
+
+  // Initial Data Load when signed in + periodic notification summary sync
   useEffect(() => {
     if (!user) return;
     loadServers(serverSearch);
     loadPosts();
     loadFriends();
-  }, [user?.id]);
+    loadNotificationSummary();
+    const timer = window.setInterval(loadNotificationSummary, 5000);
+    return () => window.clearInterval(timer);
+  }, [user?.id, loadNotificationSummary]);
 
   // Live server search
   useEffect(() => {
@@ -757,6 +939,29 @@ export default function App() {
   }, [user?.id, selectedServerId, activeVoice?.serverId, handleVoiceParticipantsSync]);
 
   // Local multi-tab BroadcastChannel sync for fallback mode
+  const dispatchIncomingNotificationRef = useRef(dispatchIncomingNotification);
+  const addNotificationRef = useRef(addNotification);
+  const loadServersRef = useRef(loadServers);
+  const loadPostsRef = useRef(loadPosts);
+  const handleVoiceParticipantsSyncRef = useRef(handleVoiceParticipantsSync);
+  const getOrCreatePeerConnectionRef = useRef(getOrCreatePeerConnection);
+
+  useEffect(() => {
+    dispatchIncomingNotificationRef.current = dispatchIncomingNotification;
+    addNotificationRef.current = addNotification;
+    loadServersRef.current = loadServers;
+    loadPostsRef.current = loadPosts;
+    handleVoiceParticipantsSyncRef.current = handleVoiceParticipantsSync;
+    getOrCreatePeerConnectionRef.current = getOrCreatePeerConnection;
+  }, [
+    dispatchIncomingNotification,
+    addNotification,
+    loadServers,
+    loadPosts,
+    handleVoiceParticipantsSync,
+    getOrCreatePeerConnection,
+  ]);
+
   useEffect(() => {
     if (!user || typeof BroadcastChannel === 'undefined') return;
     const bc = new BroadcastChannel('pilgrim_realtime_sync');
@@ -773,12 +978,19 @@ export default function App() {
           ...Object.keys(grouped),
         ]);
         checkIds.forEach((sid) => {
-          handleVoiceParticipantsSync(sid, grouped[sid] || []);
+          handleVoiceParticipantsSyncRef.current(sid, grouped[sid] || []);
         });
+      } else if (ev.data?.type === 'chat:message' && ev.data.message) {
+        const msg: ChatMessage = ev.data.message;
+        const me = userRef.current;
+        if (!me || msg.authorId === me.id) return;
+        if (msg.dmKey && !msg.dmKey.split('__').includes(me.id)) return;
+        setIncomingWsMessage(msg);
+        dispatchIncomingNotificationRef.current(msg);
       }
     };
     return () => bc.close();
-  }, [user?.id, handleVoiceParticipantsSync]);
+  }, [user?.id]);
 
   // WebSocket Connection for Real-Time Chat, Presence, and Voice Channels
   useEffect(() => {
@@ -855,14 +1067,14 @@ export default function App() {
           }
         } else if (data.type === 'chat:message' && data.message) {
           setIncomingWsMessage(data.message);
-          dispatchIncomingNotification(data.message);
+          dispatchIncomingNotificationRef.current(data.message);
         } else if (data.type === 'chat:message_updated' && data.message) {
           setIncomingWsUpdatedMessage(data.message);
         } else if (data.type === 'chat:reaction_added' && data.message) {
           const me = userRef.current;
           if (me && data.actorId && data.actorId !== me.id) {
             const msg: ChatMessage = data.message;
-            addNotification({
+            addNotificationRef.current({
               kind: 'reaction',
               title: `${data.actorName || 'Someone'} reacted ${data.emoji || ''}`,
               body: msg.content || (msg.attachmentType ? `[${msg.attachmentType}]` : 'Message'),
@@ -880,16 +1092,16 @@ export default function App() {
           data.type === 'server:channel_created' ||
           data.type === 'server:updated'
         ) {
-          loadServers(serverSearch);
+          loadServersRef.current(serverSearchRef.current);
         } else if (data.type === 'friend:update') {
-          const prevReqIds = new Set(friendsData.incomingRequests.map((r) => r.id));
+          const prevReqIds = new Set(friendsDataRef.current.incomingRequests.map((r) => r.id));
           api
             .getFriends()
             .then((res) => {
               setFriendsData(res);
               for (const req of res.incomingRequests) {
                 if (!prevReqIds.has(req.id)) {
-                  addNotification({
+                  addNotificationRef.current({
                     kind: 'friend_request',
                     title: `Friend request from ${req.user.name}`,
                     body: req.user.tag,
@@ -900,13 +1112,13 @@ export default function App() {
               }
             })
             .catch(() => {});
-          loadPosts();
+          loadPostsRef.current();
         } else if (data.type === 'voice:participants' && data.serverId) {
-          await handleVoiceParticipantsSync(data.serverId, data.participants || []);
+          await handleVoiceParticipantsSyncRef.current(data.serverId, data.participants || []);
         } else if (data.type === 'voice:signal' && data.fromUserId && data.signal) {
           const currentVoice = activeVoiceRef.current;
           if (!currentVoice || currentVoice.channelId !== data.channelId) return;
-          const pc = getOrCreatePeerConnection(data.fromUserId, data.channelId);
+          const pc = getOrCreatePeerConnectionRef.current(data.fromUserId, data.channelId);
           try {
             if (data.signal.sdp) {
               await pc.setRemoteDescription(new RTCSessionDescription(data.signal.sdp));
@@ -949,17 +1161,7 @@ export default function App() {
       if (wsRef.current === ws) wsRef.current = null;
       ws.close();
     };
-  }, [
-    user?.id,
-    loadServers,
-    loadPosts,
-    serverSearch,
-    dispatchIncomingNotification,
-    addNotification,
-    getOrCreatePeerConnection,
-    handleVoiceParticipantsSync,
-    sendWs,
-  ]);
+  }, [user?.id, sendWs]);
 
   // Desktop Push-to-Talk Keyboard Listener
   const handlePttHoldStart = useCallback(() => {
@@ -1404,9 +1606,10 @@ export default function App() {
   };
 
   const handleSendInviteDm = async (friendId: string, inviteUrl: string, serverName: string) => {
-    await api.sendDirectMessage(friendId, {
-      content: `Join me on "${serverName}" in Pilgrim! ${inviteUrl}`,
+    const res = await api.sendDirectMessage(friendId, {
+      content: `Join me on "${serverName}" in ArkLine! ${inviteUrl}`,
     });
+    touchDmTimestamp(friendId, res.message.createdAt);
     showToast('Invite sent via Direct Message!');
   };
 
@@ -1418,6 +1621,7 @@ export default function App() {
   };
 
   const handleDismissDmPopup = (friendId: string) => {
+    dismissedDmPopupsRef.current[friendId] = Math.max(unreadDmByFriendId[friendId] || 1, 1);
     setDmPopupFriendIds((prev) => prev.filter((id) => id !== friendId));
   };
 
@@ -1450,6 +1654,15 @@ export default function App() {
     setPosts([]);
     setServers([]);
     setSelectedServerId(null);
+    setUnreadDmByFriendId({});
+    setLastDmAtByFriendId({});
+    setPingsByServerId({});
+    setPingsByChannelId({});
+    setUnreadServerIds([]);
+    setDmPopupFriendIds([]);
+    setDmSendersById({});
+    setNotifications([]);
+    dismissedDmPopupsRef.current = {};
     showToast('You have been signed out.');
   };
 
@@ -1646,7 +1859,9 @@ export default function App() {
 
   const activeServer = servers.find((s) => s.id === selectedServerId) || null;
   const isFlushServerView = activeView === 'server' && Boolean(activeServer);
+  const isFlushDmView = activeView === 'friends' && Boolean(activeDmFriendId);
   const totalUnreadDms = Object.values(unreadDmByFriendId).reduce((sum, n) => sum + n, 0);
+  const totalServerPings = Object.values(pingsByServerId).reduce((sum, n) => sum + n, 0);
 
   // Aggregate live streaming user IDs across state, friends, voice rooms, and profile
   const streamingUserIds = new Set<string>();
@@ -1670,13 +1885,22 @@ export default function App() {
   const getHeaderTitle = () => {
     if (activeView === 'startup') return 'Welcome & Features';
     if (activeView === 'feed') return 'Community Feed';
-    if (activeView === 'friends') return 'Friends & Direct Messages';
+    if (activeView === 'friends') {
+      if (activeDmFriendId) {
+        const partner =
+          friendsData.friends.find((f) => f.id === activeDmFriendId) ||
+          friendsData.discoverPlayers.find((f) => f.id === activeDmFriendId) ||
+          dmSendersById[activeDmFriendId];
+        return partner ? `Direct Message · ${partner.name}` : 'Direct Message';
+      }
+      return 'Friends & Add Friend';
+    }
     if (activeView === 'discover') return 'Discover Servers';
     if (activeView === 'settings') return 'Appearance, Voice & Account';
     if (activeView === 'safety') return 'Safety & Reports';
     if (activeView === 'profile') return viewedProfile?.user.name || 'Profile Dashboard';
     if (activeView === 'server') return activeServer?.name || 'Server Chat';
-    return 'Pilgrim';
+    return 'ArkLine';
   };
 
   const filteredFeedPosts = posts.filter((p) => {
@@ -1721,20 +1945,6 @@ export default function App() {
       onTouchEnd={handleTouchEnd}
       className="min-h-screen bg-[#f4f4f5] dark:bg-zinc-950 text-zinc-950 dark:text-zinc-100 flex transition-colors"
     >
-      {/* Toast Notification */}
-      <AnimatePresence>
-        {toastMsg && (
-          <motion.div
-            initial={{ opacity: 0, y: 16 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 12 }}
-            className="fixed bottom-20 lg:bottom-5 right-4 lg:right-5 z-50 bg-zinc-950 dark:bg-white text-white dark:text-zinc-950 px-4 py-2.5 rounded-xl shadow-lg border border-zinc-800 dark:border-zinc-200 text-xs font-medium flex items-center gap-2 max-w-sm"
-          >
-            <CheckCircle2 className="w-4 h-4 text-zinc-300 dark:text-zinc-700 shrink-0" />
-            <span className="truncate">{toastMsg}</span>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* Black Sidebar */}
       <Sidebar
@@ -1742,6 +1952,7 @@ export default function App() {
         activeView={activeView}
         onNavigate={(view) => {
           if (view === 'settings') setSettingsFocusSection('appearance');
+          if (view === 'friends') setActiveDmFriendId(null);
           setActiveView(view);
         }}
         servers={servers}
@@ -1762,7 +1973,12 @@ export default function App() {
         onlineUserIds={onlineUserIds}
         activeDmFriendId={activeDmFriendId}
         dmPopupFriendIds={dmPopupFriendIds}
+        dmSendersById={dmSendersById}
         unreadDmByFriendId={unreadDmByFriendId}
+        lastDmAtByFriendId={lastDmAtByFriendId}
+        pingsByServerId={pingsByServerId}
+        pingsByChannelId={pingsByChannelId}
+        unreadServerIds={unreadServerIds}
         onSelectDmPopup={handleSelectDmPopup}
         onDismissDmPopup={handleDismissDmPopup}
         streamingUserIds={streamingUserIds}
@@ -1808,7 +2024,11 @@ export default function App() {
           }
           onClearNotifications={() => setNotifications([])}
           onSelectNotification={handleSelectNotification}
-          onOpenAddFriend={() => setActiveView('friends')}
+          onOpenAddFriend={() => {
+            setActiveDmFriendId(null);
+            setActiveView('friends');
+          }}
+          unreadDmCount={totalUnreadDms + totalServerPings}
           isMobileOpen={isMobileSidebarOpen}
           setIsMobileOpen={setIsMobileSidebarOpen}
         />
@@ -1817,6 +2037,8 @@ export default function App() {
           className={
             isFlushServerView
               ? 'flex-1 p-2 sm:p-4 lg:p-0 max-w-none w-full pb-16 lg:pb-0'
+              : isFlushDmView
+              ? 'flex-1 p-0 max-w-none w-full pb-14 lg:pb-0'
               : 'flex-1 p-4 sm:p-6 lg:p-8 max-w-6xl w-full mx-auto pb-20 lg:pb-8'
           }
         >
@@ -1863,7 +2085,7 @@ export default function App() {
                   />
                   <div>
                     <p className="text-sm font-bold text-zinc-950 dark:text-zinc-50">
-                      Share with the Pilgrim Community
+                      Share with the ArkLine Community
                     </p>
                     <p className="text-xs text-zinc-500 dark:text-zinc-400">
                       Upload a video, image, or thought — Public, Friends-Only, or Private.
@@ -1998,6 +2220,7 @@ export default function App() {
               streamingUserIds={streamingUserIds}
               selectedChannelId={selectedChannelId}
               onSelectChannelId={(cid) => setSelectedChannelId(cid)}
+              pingsByChannelId={pingsByChannelId}
               incomingWsMessage={incomingWsMessage}
               incomingWsUpdatedMessage={incomingWsUpdatedMessage}
               incomingWsDeletedMessageId={incomingWsDeletedMessageId}
@@ -2082,8 +2305,12 @@ export default function App() {
                   setDmPopupFriendIds((prev) => prev.filter((id) => id !== fid));
                 }
               }}
+              dmSendersById={dmSendersById}
               unreadDmByFriendId={unreadDmByFriendId}
               onClearDmUnread={clearDmUnread}
+              onDmSent={(fid, msg) => {
+                touchDmTimestamp(fid, msg.createdAt);
+              }}
               incomingWsMessage={incomingWsMessage}
               incomingWsUpdatedMessage={incomingWsUpdatedMessage}
               incomingWsDeletedMessageId={incomingWsDeletedMessageId}
@@ -2114,9 +2341,32 @@ export default function App() {
           {activeView === 'settings' && (
             <SettingsView
               preferences={preferences}
-              onUpdatePreferences={setPreferences}
+              onUpdatePreferences={(nextPrefs) => {
+                const prevMode = preferencesRef.current.voice.inputMode;
+                preferencesRef.current = nextPrefs;
+                setPreferences(nextPrefs);
+                if (activeVoice && nextPrefs.voice.inputMode !== prevMode) {
+                  const nextVoice: ActiveVoiceInfo = {
+                    ...activeVoice,
+                    pttActive: false,
+                    speaking: false,
+                  };
+                  setActiveVoice(nextVoice);
+                  syncMicTransmission(nextVoice);
+                }
+              }}
               onResetDefaults={() => {
+                preferencesRef.current = DEFAULT_PREFERENCES;
                 setPreferences(DEFAULT_PREFERENCES);
+                if (activeVoice) {
+                  const nextVoice: ActiveVoiceInfo = {
+                    ...activeVoice,
+                    pttActive: false,
+                    speaking: false,
+                  };
+                  setActiveVoice(nextVoice);
+                  syncMicTransmission(nextVoice);
+                }
                 showToast('Settings reset to defaults.');
               }}
               onSignOut={handleSignOut}
@@ -2156,11 +2406,18 @@ export default function App() {
         <button
           type="button"
           onClick={() => setIsMobileSidebarOpen(true)}
-          className={`min-h-[44px] flex flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-semibold cursor-pointer ${
+          className={`min-h-[44px] relative flex flex-col items-center justify-center gap-0.5 rounded-xl text-[10px] font-semibold cursor-pointer ${
             activeView === 'server' ? 'text-white' : 'text-zinc-400 hover:text-zinc-200'
           }`}
         >
-          <Compass className="w-4 h-4" />
+          <div className="relative">
+            <Compass className="w-4 h-4" />
+            {totalServerPings > 0 && (
+              <span className="absolute -top-1.5 -right-2 min-w-[14px] h-[14px] px-0.5 rounded-full bg-red-500 text-white text-[9px] font-bold flex items-center justify-center font-mono">
+                {totalServerPings > 99 ? '99+' : totalServerPings}
+              </span>
+            )}
+          </div>
           <span>Servers</span>
         </button>
 
@@ -2234,7 +2491,7 @@ export default function App() {
           showToast(
             blocked
               ? 'Report submitted and user blocked.'
-              : 'Report submitted to Pilgrim Safety Team.'
+              : 'Report submitted to ArkLine Safety Team.'
           );
           if (blocked) {
             api.getMe().then((res) => setUser(res.user));

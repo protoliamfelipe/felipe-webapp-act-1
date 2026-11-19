@@ -196,7 +196,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
     } catch (err: any) {
       const msg = err?.message || 'Could not send login code.';
       setErrorMessage(msg);
-      if (msg.toLowerCase().includes('no pilgrim account')) {
+      if (msg.toLowerCase().includes('no pilgrim account') || msg.toLowerCase().includes('no arkline account')) {
         setUnregisteredPrompt(true);
       }
     } finally {
@@ -256,7 +256,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
       }
 
       if (!acceptedTos) {
-        setErrorMessage('You must read and accept the Pilgrim Terms of Service to create an account.');
+        setErrorMessage('You must read and accept the ArkLine Terms of Service to create an account.');
         return;
       }
     }
@@ -316,17 +316,17 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
             <PilgrimLogo className="w-full h-full" invertOnDark />
           </div>
           <span className="font-display text-3xl font-extrabold tracking-tight text-zinc-950 dark:text-white">
-            Pilgrim
+            ArkLine
           </span>
         </div>
 
         <h1 className="mt-5 text-center font-display text-2xl font-bold text-zinc-950 dark:text-white">
-          {mode === 'signin' ? 'Sign In to Pilgrim' : 'Create an Account'}
+          {mode === 'signin' ? 'Sign In to ArkLine' : 'Create an Account'}
         </h1>
         <p className="mt-1.5 text-center text-sm text-zinc-600 dark:text-zinc-400 max-w-md mx-auto">
           {mode === 'signin'
             ? 'Connect with friends, join community servers, and share your posts and videos.'
-            : 'Upload your profile photo, pick a private gamer username, and join Pilgrim.'}
+            : 'Upload your profile photo, pick a private gamer username, and join ArkLine.'}
         </p>
       </div>
 
@@ -422,7 +422,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
                 <h2 className="font-display text-base font-bold">Access Denied</h2>
               </div>
               <p className="text-xs text-zinc-300 leading-relaxed">
-                Pilgrim is available only to users aged <strong>13 and older</strong>. Because the birth date entered indicates age 12 or below, access is denied until you reach age 13.
+                ArkLine is available only to users aged <strong>13 and older</strong>. Because the birth date entered indicates age 12 or below, access is denied until you reach age 13.
               </p>
             </div>
           )}
@@ -740,7 +740,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
                     onClick={() => setTosModalOpen(true)}
                     className="font-bold text-zinc-950 dark:text-white underline hover:opacity-80 cursor-pointer"
                   >
-                    Pilgrim Terms of Service & Community Guidelines
+                    ArkLine Terms of Service & Community Guidelines
                   </button>
                   .
                 </label>
@@ -819,7 +819,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
           >
             <div className="px-5 py-4 border-b border-zinc-200 dark:border-zinc-800 flex items-center justify-between">
               <h3 className="font-display text-base font-bold text-zinc-950 dark:text-white">
-                Pilgrim Terms of Service & Community Guidelines
+                ArkLine Terms of Service & Community Guidelines
               </h3>
               <button
                 type="button"
@@ -831,7 +831,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
             </div>
             <div className="p-5 overflow-y-auto space-y-3.5 text-xs text-zinc-600 dark:text-zinc-300 leading-relaxed">
               <p>
-                <strong>1. Eligibility & Privacy:</strong> You must be at least 13 years old to register or use Pilgrim. Use a non-identifying gamer username rather than personal details when interacting publicly.
+                <strong>1. Eligibility & Privacy:</strong> You must be at least 13 years old to register or use ArkLine. Use a non-identifying gamer username rather than personal details when interacting publicly.
               </p>
               <p>
                 <strong>2. Respectful Conduct:</strong> Harassment, hate speech, threats, doxxing, impersonation, or sharing non-consensual content is strictly prohibited across all posts, servers, DMs, and voice channels.
@@ -843,7 +843,7 @@ export const AuthScreen: React.FC<AuthScreenProps> = ({ onAuthSuccess }) => {
                 <strong>4. Server Moderation & Safety:</strong> Server owners and authorized moderators may timeout, kick, or ban members, remove messages, and manage roles. Users may block or report bad actors anytime via Safety & Reports.
               </p>
               <p>
-                <strong>5. Account Security:</strong> Keep your credentials private and review active invite links regularly. Pilgrim reserves the right to suspend accounts violating safety rules.
+                <strong>5. Account Security:</strong> Keep your credentials private and review active invite links regularly. ArkLine reserves the right to suspend accounts violating safety rules.
               </p>
             </div>
             <div className="px-5 py-3.5 border-t border-zinc-200 dark:border-zinc-800 flex items-center justify-end gap-2 bg-zinc-50 dark:bg-zinc-950">

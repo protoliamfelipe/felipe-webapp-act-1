@@ -26,7 +26,7 @@ export const PilgrimLogo: React.FC<PilgrimLogoProps> = ({
         className={`${className} shrink-0`}
         fill="none"
         xmlns="http://www.w3.org/2000/svg"
-        aria-label="Pilgrim Emblem"
+        aria-label="ArkLine Emblem"
       >
         <path
           d={PILGRIM_EMBLEM_PATH}
@@ -44,7 +44,7 @@ export const PilgrimLogo: React.FC<PilgrimLogoProps> = ({
       className={`${className} shrink-0`}
       fill="none"
       xmlns="http://www.w3.org/2000/svg"
-      aria-label="Pilgrim Emblem"
+      aria-label="ArkLine Emblem"
     >
       <rect width="100" height="100" rx="22" fill="#09090B" />
       <path

@@ -129,11 +129,11 @@ export const StartupPage: React.FC<StartupPageProps> = ({
               </div>
 
               <h1 className="font-display text-3xl sm:text-4xl font-extrabold tracking-tight text-zinc-950 dark:text-white text-balance">
-                Welcome to Pilgrim, {user.name}
+                Welcome to ArkLine, {user.name}
               </h1>
 
               <p className="text-sm sm:text-base text-zinc-600 dark:text-zinc-300 leading-relaxed max-w-xl">
-                Pilgrim brings real-time community servers, direct messaging, and a customizable creator profile together in one focused platform. Upload videos, share images, and post thoughts with full privacy control.
+                ArkLine brings real-time community servers, direct messaging, and a customizable creator profile together in one focused platform. Upload videos, share images, and post thoughts with full privacy control.
               </p>
             </div>
 
@@ -192,7 +192,7 @@ export const StartupPage: React.FC<StartupPageProps> = ({
             </div>
 
             <div className="relative z-10 text-white pt-8">
-              <p className="text-xs font-mono text-zinc-400">Pilgrim Network</p>
+              <p className="text-xs font-mono text-zinc-400">ArkLine Network</p>
               <p className="font-display text-xl font-bold mt-0.5">
                 Chat, Share Media, and Connect
               </p>
@@ -201,11 +201,11 @@ export const StartupPage: React.FC<StartupPageProps> = ({
         </div>
       </section>
 
-      {/* What Pilgrim Has to Offer */}
+      {/* What ArkLine Has to Offer */}
       <section className="space-y-4">
         <div>
           <h2 className="font-display text-xl font-bold text-zinc-950 dark:text-white">
-            Everything Pilgrim Offers
+            Everything ArkLine Offers
           </h2>
           <p className="text-xs text-zinc-600 dark:text-zinc-400 mt-0.5">
             One unified platform combining icon-based community servers, creator video uploads, and customizable reading settings.
